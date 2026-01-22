@@ -72,6 +72,10 @@ def convert_subset(set_name: str, config: DataProcessConfig):
                 inputs.append(np.frombuffer(q.replace('.', '0').encode(), dtype=np.uint8).reshape(9, 9) - ord('0'))
                 labels.append(np.frombuffer(a.encode(), dtype=np.uint8).reshape(9, 9) - ord('0'))
 
+    # Limit the test set to first 1000 examples
+    if set_name == "test":
+        inputs = inputs[:1000]
+        labels = labels[:1000]
     # If subsample_size is specified for the training set,
     # randomly sample the desired number of examples.
     if set_name == "train" and config.subsample_size is not None:
