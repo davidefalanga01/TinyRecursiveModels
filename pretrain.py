@@ -309,7 +309,8 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     if world_size > 1:
         for param in train_state.model.parameters():
             if param.grad is not None:
-                dist.all_reduce(param.grad)
+                dist.all_reduce(param.grad, op=dist.ReduceOp.SUM)
+                param.grad.div_(world_size)
             
     # Apply optimizer
     lr_this_step = None    
