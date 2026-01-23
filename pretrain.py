@@ -9,6 +9,7 @@ import copy
 import torch
 import torch.distributed as dist
 from torch import nn
+from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 
@@ -89,6 +90,7 @@ class TrainState:
     model: nn.Module
     optimizers: Sequence[torch.optim.Optimizer]
     optimizer_lrs: Sequence[float]
+    scaler: GradScaler
     carry: Any
 
     step: int
@@ -229,6 +231,7 @@ def init_train_state(config: PretrainConfig, train_metadata: PuzzleDatasetMetada
         model=model,
         optimizers=optimizers,
         optimizer_lrs=optimizer_lrs,
+        scaler=torch.cuda.amp.GradScaler(enabled=(getattr(config.arch, "forward_dtype", "bfloat16") == "float16")),
         carry=None
     )
 
@@ -303,7 +306,7 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     # Forward
     train_state.carry, loss, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
 
-    ((1 / global_batch_size) * loss).backward()
+    train_state.scaler.scale((1 / global_batch_size) * loss).backward()
 
     # Allreduce
     if world_size > 1:
@@ -320,8 +323,10 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
         for param_group in optim.param_groups:
             param_group['lr'] = lr_this_step
             
-        optim.step()
+        train_state.scaler.step(optim)
         optim.zero_grad()
+    
+    train_state.scaler.update()
 
     # Reduce metrics
     if len(metrics):
