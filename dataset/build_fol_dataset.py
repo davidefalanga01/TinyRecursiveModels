@@ -71,6 +71,30 @@ def solve(premises_str, conclusion_str):
 
     return True 
 
+def tokenize(text, seq_len=64):
+    # Tokenize
+    tokens = [VOCAB.get(c, VOCAB.get(text[i:i+2], 0)) for i, c in enumerate(text)]
+    # Fix double char token for |-
+    clean_tokens = []
+    skip = False
+    for i, c in enumerate(text):
+        if skip:
+            skip = False
+            continue
+        if text[i:i+2] == '|-':
+            clean_tokens.append(VOCAB['|-'])
+            skip = True
+        elif c in VOCAB:
+            clean_tokens.append(VOCAB[c])
+    
+    if len(clean_tokens) > seq_len - 1:
+        return None
+        
+    # Pad
+    clean_tokens.append(VOCAB['end'])
+    tokens = clean_tokens + [VOCAB['pad']] * (seq_len - len(clean_tokens))
+    return tokens
+
 def generate_random_expr(vocab_subset, depth=0, max_depth=2):
     if depth >= max_depth or (depth > 0 and random.random() < 0.3):
         return random.choice(vocab_subset)
@@ -100,33 +124,19 @@ def generate_sample(seq_len=64, num_vars=4, max_depth=2):
         else:
             conclusion_str = generate_random_expr(vocab_subset, 0, max_depth)
 
-        # Define the text-label pair
+        # Generate only valid label-text pairs
+        if solve(premises_str, conclusion_str):
+            label = conclusion_str 
+        else:
+            continue
         text = premises_str
-        label = conclusion_str if solve(premises_str, conclusion_str) else '0'
 
-        # Tokenize
-        tokens = [VOCAB.get(c, VOCAB.get(text[i:i+2], 0)) for i, c in enumerate(text)]
-        # Fix double char token for |-
-        clean_tokens = []
-        skip = False
-        for i, c in enumerate(text):
-            if skip:
-                skip = False
-                continue
-            if text[i:i+2] == '|-':
-                clean_tokens.append(VOCAB['|-'])
-                skip = True
-            elif c in VOCAB:
-                clean_tokens.append(VOCAB[c])
-        
-        if len(clean_tokens) > seq_len - 1:
+        premise_tokenized = tokenize(text)
+        conclusion_tokenized = tokenize(label)
+        if (premise_tokenized is None) or (conclusion_tokenized is None):
             continue # Try again if too long
-            
-        # Pad
-        clean_tokens.append(VOCAB['end'])
-        tokens = clean_tokens + [VOCAB['pad']] * (seq_len - len(clean_tokens))
         
-        return np.array(tokens), np.array(label)
+        return np.array(premise_tokenized), np.array(conclusion_tokenized)
 
 # Dataset generation
 def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
@@ -140,11 +150,8 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
     results["group_indices"].append(0)
 
     for _ in tqdm(range(num_samples), desc=f"Generating {set_name}"):
-        # Generate only valid pairs
-        while True:
-            inp, out = generate_sample(config.seq_len, config.num_vars, config.max_depth)
-            if out != '0':
-                break
+        inp, out = generate_sample(config.seq_len, config.num_vars, config.max_depth)
+       
         results["inputs"].append(inp)
         results["labels"].append(out)
         example_id += 1
