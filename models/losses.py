@@ -68,9 +68,10 @@ class ACTLossHead(nn.Module):
             loss_divisor = loss_counts.clamp_min(1).unsqueeze(-1)  # Avoid NaNs in division
 
             # is_correct = mask & (torch.argmax(outputs["logits"], dim=-1) == labels)
-            preds = torch.argmax(outputs["logits"], dim=-1)  # [B]
-            mask_pred = mask.gather(1, preds.unsqueeze(1)).squeeze(1)
-            is_correct = mask_pred & (preds == labels)
+            preds = torch.argmax(outputs["logits"], dim=-1)  # [B, SeqLen]
+
+            # correttezza token-wise (ignora padding)
+            is_correct = (preds == labels) & mask   # [B, SeqLen]
             #
             seq_is_correct = is_correct.sum(-1) == loss_counts
             
