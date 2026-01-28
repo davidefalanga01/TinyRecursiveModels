@@ -103,8 +103,6 @@ def generate_sample(seq_len=64, num_vars=4, max_depth=2):
         label = 1 if solve(premises_str, conclusion_str) else 0
         
         text = f"{premises_str}|-{conclusion_str}"
-        # --- PRINT THE GENERATED EXPRESSIONS ---
-        print(f"Generated sample:\n  Premises: {premises_str}\n  Conclusion: {conclusion_str}\n  Label: {label}\n")
 
         # Tokenize
         tokens = [VOCAB.get(c, VOCAB.get(text[i:i+2], 0)) for i, c in enumerate(text)]
