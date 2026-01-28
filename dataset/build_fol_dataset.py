@@ -99,10 +99,10 @@ def generate_sample(seq_len=64, num_vars=4, max_depth=2):
             conclusion_str = random.choice(premises) if random.random() < 0.3 else generate_random_expr(vocab_subset, 0, max_depth)
         else:
             conclusion_str = generate_random_expr(vocab_subset, 0, max_depth)
-            
-        label = 1 if solve(premises_str, conclusion_str) else 0
-        
-        text = f"{premises_str}|-{conclusion_str}"
+
+        # Define the text-label pair
+        text = premises_str
+        label = conclusion_str if solve(premises_str, conclusion_str) else '0'
 
         # Tokenize
         tokens = [VOCAB.get(c, VOCAB.get(text[i:i+2], 0)) for i, c in enumerate(text)]
@@ -140,7 +140,11 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
     results["group_indices"].append(0)
 
     for _ in tqdm(range(num_samples), desc=f"Generating {set_name}"):
-        inp, out = generate_sample(config.seq_len, config.num_vars, config.max_depth)
+        # Generate only valid pairs
+        while True:
+            inp, out = generate_sample(config.seq_len, config.num_vars, config.max_depth)
+            if out != '0':
+                break
         results["inputs"].append(inp)
         results["labels"].append(out)
         example_id += 1
