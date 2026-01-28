@@ -67,7 +67,11 @@ class ACTLossHead(nn.Module):
             loss_counts = mask.sum(-1)
             loss_divisor = loss_counts.clamp_min(1).unsqueeze(-1)  # Avoid NaNs in division
 
-            is_correct = mask & (torch.argmax(outputs["logits"], dim=-1) == labels)
+            # is_correct = mask & (torch.argmax(outputs["logits"], dim=-1) == labels)
+            preds = torch.argmax(outputs["logits"], dim=-1)  # [B]
+            mask_pred = mask.gather(1, preds.unsqueeze(1)).squeeze(1)
+            is_correct = mask_pred & (preds == labels)
+            #
             seq_is_correct = is_correct.sum(-1) == loss_counts
             
             # Metrics (halted)
