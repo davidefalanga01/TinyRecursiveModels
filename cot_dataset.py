@@ -20,18 +20,30 @@ class GSM8KDataset(IterableDataset):
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.pad_id = self.tokenizer.pad_token_id
 
         # 2. Carichiamo GSM8K (scarica automaticamente da HF)
         self.ds = load_dataset("gsm8k", "main", split=split)
         
         # 3. Prepariamo i dati: "Question: ... Answer: ..."
         self.examples = []
+
         for ex in self.ds:
-            # Uniamo domanda e risposta in un unico blocco di testo
-            text = f"Question: {ex['question']}\nAnswer: {ex['answer']}{self.tokenizer.eos_token}"
-            tokens = self.tokenizer.encode(text)
-            if len(tokens) <= self.seq_len:
-                self.examples.append(tokens)
+            prompt = f"Question: {ex['question']}\nAnswer:"
+            completion = f" {ex['answer']}{self.tokenizer.eos_token}"
+
+            prompt_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
+            completion_ids = self.tokenizer.encode(completion, add_special_tokens=False)
+
+            input_ids = prompt_ids + completion_ids
+            labels = [-100] * len(prompt_ids) + completion_ids
+
+            if len(input_ids) <= self.seq_len:
+                pad_len = self.seq_len - len(input_ids)
+                input_ids += [self.pad_id] * pad_len
+                labels += [-100] * pad_len
+
+                self.examples.append((input_ids, labels))
         
         print(f"Dataset GSM8K pronto: {len(self.examples)} esempi validi.")
 
@@ -40,20 +52,12 @@ class GSM8KDataset(IterableDataset):
             # Selezioniamo indici casuali
             ix = np.random.randint(0, len(self.examples), self.batch_size)
             
-            batch_x = []
-            for i in ix:
-                tokens = self.examples[i]
-                # Aggiungiamo padding se la frase è corta
-                padding_len = self.seq_len - len(tokens)
-                padded_tokens = tokens + [self.tokenizer.pad_token_id] * padding_len
-                batch_x.append(torch.tensor(padded_tokens))
-            
-            x_tensor = torch.stack(batch_x) # [Batch, Seq_Len]
-            
-            # Formato per il tuo modello
+            batch_x, batch_y = zip(*[self.examples[i] for i in ix])
+
             batch = {
-                "inputs": x_tensor,
-                "puzzle_identifiers": torch.zeros((self.batch_size,), dtype=torch.long)
+                "inputs": torch.tensor(batch_x, dtype=torch.long),
+                "labels": torch.tensor(batch_y, dtype=torch.long),
+                "puzzle_identifiers": torch.zeros(self.batch_size, dtype=torch.long)
             }
-            
+
             yield "gsm8k_train", batch, self.batch_size
