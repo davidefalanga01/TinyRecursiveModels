@@ -131,8 +131,11 @@ def generate_sample(seq_len=64, num_vars=4, max_depth=2):
             continue
         text = premises_str
 
-        premise_tokenized = tokenize(text)
-        conclusion_tokenized = tokenize(label)
+        input = f'{text}|-'
+        output = f'{text}|-{label}'
+
+        premise_tokenized = tokenize(input)
+        conclusion_tokenized = tokenize(output)
         if (premise_tokenized is None) or (conclusion_tokenized is None):
             continue # Try again if too long
         
