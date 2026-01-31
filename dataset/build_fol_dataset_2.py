@@ -268,67 +268,84 @@ def check_triviality(premises_str, conclusion_str, all_premises, forced_vars):
 
 def generate_sample(seq_len=64, num_vars=4, max_depth=2, require_nontrivial=True):
     """
-    Generate a single sample with improved non-triviality guarantees.
+    Generative Solver Task:
+    Input: "Premises |-"
+    Label: "Premises |- sorted_list_of_proven_atoms"
+    
+    Example:
+        Premises: (a > b) & a
+        Forced Vars: {a: True, b: True}
+        Target Output: "a & b"
     """
     vocab_subset = VARS[:num_vars]
     
     max_attempts = 50
     for attempt in range(max_attempts):
-        # 1. Generate premises with mix of rules and facts
-        num_facts = random.randint(0, 2)  # Allow 0 facts for more variety
+        # 1. Generate Premises (Same as before)
+        num_facts = random.randint(0, 2)
         facts = [random.choice(vocab_subset) for _ in range(num_facts)]
-        
         num_rules = random.randint(1, 3)
         rules = [generate_random_expr(vocab_subset, 0, max_depth) for _ in range(num_rules)]
         
         all_premises = rules + facts
         premises_str = "(" + ")&(".join(all_premises) + ")"
         
-        # 2. Check satisfiability
+        # 2. Check Satisfiability
         if not is_satisfiable(premises_str):
             continue
-        
-        # 3. Get forced variables
+            
+        # 3. Get Deterministic Answer (The Solver Step)
+        # This function identifies exactly which variables are locked to a value
         forced_vars = get_forced_variables(premises_str)
         
-        # 4. Generate conclusion using intelligent strategies
-        # 70% use inference-based generation, 30% random
-        if random.random() < 0.7:
-            candidate_conclusion = generate_conclusion_from_inference(
-                premises_str, vocab_subset, forced_vars
-            )
+        # Filter for "Nontrivial" samples if requested
+        # We define trivial as: No variables are forced OR only variables explicitly mentioned as facts are forced
+        if require_nontrivial:
+            if not forced_vars:
+                continue
+            # Logic: If the only forced vars are the ones we explicitly gave as 'facts' (A & B), it's trivial.
+            # We want cases where reasoning (inference) was required.
+            if len(forced_vars) <= num_facts:
+                 # Heuristic: if we have fewer forced vars than facts, it's likely just recall.
+                 # Better check: Are there forced vars that were NOT in the 'facts' list?
+                 derived_vars = [v for v in forced_vars if v not in facts]
+                 if not derived_vars:
+                     continue
+
+        # 4. Construct the Deterministic Target String
+        # We sort variables to ensure there is only ONE correct order (Canonical Form)
+        sorted_vars = sorted(forced_vars.keys())
+        
+        proof_atoms = []
+        for v in sorted_vars:
+            if forced_vars[v] is True:
+                proof_atoms.append(v)       # e.g., "a"
+            else:
+                proof_atoms.append(f"~{v}") # e.g., "~a"
+        
+        if not proof_atoms:
+            # Decide on a token for "Nothing proven". 
+            # Using 'pad' or empty string is essentially what happens if we just end.
+            # Let's verify we want to train on empty samples. 
+            # If require_nontrivial is True, we won't reach here.
+            conclusion_str = "" 
         else:
-            candidate_conclusion = generate_random_expr(vocab_subset, 0, max_depth)
-        
-        # 5. Check if it's a valid entailment
-        if not entails(premises_str, candidate_conclusion):
-            continue
-        
-        # 6. Enhanced triviality check
-        is_trivial, reason = check_triviality(
-            premises_str, candidate_conclusion, all_premises, forced_vars
-        )
-        
-        if require_nontrivial and is_trivial:
-            continue
-        
-        # 7. Create strings
+            conclusion_str = "&".join(proof_atoms)
+
+        # 5. Tokenize
         input_str = f'{premises_str}|-'
-        output_str = f'{premises_str}|-{candidate_conclusion}'
+        output_str = f'{premises_str}|-{conclusion_str}'
         
-        # 8. Tokenize
         premise_tokenized = tokenize(input_str, seq_len)
         conclusion_tokenized = tokenize(output_str, seq_len)
         
         if premise_tokenized is None or conclusion_tokenized is None:
             continue
-        
-        return np.array(premise_tokenized), np.array(conclusion_tokenized), is_trivial
-    
-    # If we fail to generate non-trivial, allow trivial as fallback
-    if require_nontrivial:
-        return generate_sample(seq_len, num_vars, max_depth, require_nontrivial=False)
-    
+            
+        # Success
+        return np.array(premise_tokenized), np.array(conclusion_tokenized), False
+
+    # Fallback
     return None, None, True
 
 
