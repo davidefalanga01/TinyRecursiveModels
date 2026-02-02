@@ -666,7 +666,15 @@ def launch(hydra_config: DictConfig):
         # Save Weights
         save_path = "/kaggle/working/final_model.pt"
         torch.save(state_dict_to_save, save_path)
-        print(f"✅ Model saved successfully to: {save_path}")           
+        print(f"✅ Model saved successfully to: {save_path}")
+        
+        # Save Config
+        try:
+            from omegaconf import OmegaConf
+            OmegaConf.save(config, "/kaggle/working/final_config.yaml")
+            print("✅ Config saved to: /kaggle/working/final_config.yaml")
+        except Exception as e:
+            print(f"Warning: Could not save config: {e}")
 
     # finalize
     if dist.is_initialized():
