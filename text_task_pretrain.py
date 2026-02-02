@@ -258,7 +258,7 @@ def create_dataloader(config: PretrainConfig, split: str, world_size: int) -> Tu
         data_path=config.data_path,
         seq_len=config.seq_len,
         batch_size=per_replica_batch,
-        seed=config.seed,
+        seed=config.seed + dist.get_rank(),
         tokenizer_name=config.tokenizer_name,
         max_sequences_per_epoch=config.max_sequences_per_epoch,
         streaming=config.streaming,
@@ -267,12 +267,18 @@ def create_dataloader(config: PretrainConfig, split: str, world_size: int) -> Tu
     dataloader, metadata = create_dataset_loader(dataset_config, split=split)
 
     if world_size > 1:
+    # Only use DistributedSampler for map-style datasets 
+    if hasattr(dataloader.dataset, "__len__"):
         dataloader.sampler = torch.utils.data.DistributedSampler(
             dataloader.dataset,
             num_replicas=world_size,
             rank=dist.get_rank(),
-            shuffle=True
+            shuffle=True,
         )
+    else:
+        # For streaming/iterable datasets, rely on each rank having a different seed
+        print(f"[rank {dist.get_rank()}] Streaming dataset detected — skipping DistributedSampler.")
+
     
     return dataloader, metadata
 
