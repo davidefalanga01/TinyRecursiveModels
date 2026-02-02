@@ -304,9 +304,11 @@ def create_model(config: PretrainConfig, metadata, device: torch.device, world_s
         state_dict = torch.load(config.load_checkpoint, map_location="cpu")
         model.load_state_dict(state_dict, strict=False)
 
+    model = model.to(device)
+
     if world_size > 1:
         with torch.no_grad():
-            for p in list(model.parameters()) + list(model.buffers()):
+            for p in model.parameters():
                 dist.broadcast(p, src=0)
 
     optimizers: List[torch.optim.Optimizer] = [
@@ -682,7 +684,7 @@ def launch(cfg: DictConfig) -> None:
     device = _device()
 
     if "LOCAL_RANK" in os.environ:
-        dist.init_process_group(backend="nccl")
+        dist.init_process_group(backend="nccl", device_id=local_rank)
         local_rank = int(os.environ["LOCAL_RANK"])
         torch.cuda.set_device(local_rank)
         device = torch.device("cuda", local_rank)
