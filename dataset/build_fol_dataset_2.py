@@ -112,6 +112,7 @@ def convert_subset(set_name, config, num):
                 results["puzzle_identifiers"].append(0)
                 valid += 1; pbar.update(1)
 
+
     final = {k: np.array(v) if k!="puzzle_identifiers" else np.array(v, dtype=np.int32) for k,v in results.items()}
     final["puzzle_identifiers"] = np.array(results["puzzle_identifiers"], dtype=np.int32)
     final["inputs"] = np.stack(results["inputs"])
@@ -119,13 +120,30 @@ def convert_subset(set_name, config, num):
     
     save_dir = os.path.join(config.output_dir, set_name)
     os.makedirs(save_dir, exist_ok=True)
-    for k,v in final.items(): np.save(os.path.join(save_dir, f"all__{k}.npy"), v)
+    for k,v in final.items(): 
+        np.save(os.path.join(save_dir, f"all__{k}.npy"), v)
     
+    # ===== FIX: Add all required metadata fields =====
     with open(os.path.join(save_dir, "dataset.json"), "w") as f:
-        # Correctly calculate vocab size from the dictionary
-        json.dump({"seq_len": config.seq_len, "vocab_size": len(VOCAB), "pad_id": 0, "sets": ["all"]}, f)
-    with open(os.path.join(config.output_dir, "vocab.json"), "w") as f: json.dump(VOCAB, f)
-    with open(os.path.join(config.output_dir, "identifiers.json"), "w") as f: json.dump(["<blank>"], f)
+        json.dump({
+            "seq_len": config.seq_len,
+            "vocab_size": len(VOCAB),
+            "pad_id": 0,
+            "ignore_label_id": 0,  # Added
+            "blank_identifier_id": 0,  # Added
+            "num_puzzle_identifiers": 1,  # Added
+            "total_groups": p_id,  # Added
+            "mean_puzzle_examples": 1.0,  # Added (each puzzle has 1 example)
+            "total_puzzles": p_id,  # Added
+            "sets": ["all"]
+        }, f)
+    # ===== END FIX =====
+    
+    with open(os.path.join(config.output_dir, "vocab.json"), "w") as f: 
+        json.dump(VOCAB, f)
+    with open(os.path.join(config.output_dir, "identifiers.json"), "w") as f: 
+        json.dump(["<blank>"], f)
+
 
 @cli.command(singleton=True)
 def preprocess_data(config: DataProcessConfig):
