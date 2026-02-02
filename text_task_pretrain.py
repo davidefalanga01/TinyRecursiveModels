@@ -684,7 +684,7 @@ def launch(cfg: DictConfig) -> None:
     device = _device()
 
     if "LOCAL_RANK" in os.environ:
-        dist.init_process_group(backend="nccl", device_id=local_rank)
+        dist.init_process_group(backend="nccl")
         local_rank = int(os.environ["LOCAL_RANK"])
         torch.cuda.set_device(local_rank)
         device = torch.device("cuda", local_rank)
