@@ -1,226 +1,248 @@
-"""
-Propositional Logic SAT Task for TRM
-Iteratively assigns truth values to forced variables
-"""
-
-import os, json, string, random, itertools, numpy as np
-from typing import Optional, Dict, List, Tuple
+import os
+import json
+import string
+import random
+import numpy as np
+import networkx as nx
+from typing import Optional, List, Tuple
 from pydantic import BaseModel
 from argdantic import ArgParser
 from tqdm import tqdm
 
-# Minimal vocabulary (21 tokens vs your 35)
-VARS = list(string.ascii_lowercase)[:8]
+# --- Vocabulary Definition ---
+# We use A-Z for variables.
+# We define specific tokens for structure to make it easier for the Tiny Model.
+VARS = list(string.ascii_uppercase)
+SPECIALS = ['Facts:', 'Rules:', 'Target:', '>', '|', 'end', 'pad']
+
 VOCAB = {
     'pad': 0,
-    **{v: i+1 for i, v in enumerate(VARS)},  # 1-8: a-h
-    '&': 9, '|': 10, '>': 11, '~': 12,
-    '(': 13, ')': 14, '#': 15,
-    'T': 16, 'F': 17, '=': 18, ',': 19,
-    'end': 20
+    'end': 1,
+    **{v: i + 2 for i, v in enumerate(VARS)},
+    **{s: i + 2 + len(VARS) for i, s in enumerate(SPECIALS)}
 }
+INV_VOCAB = {v: k for k, v in VOCAB.items()}
 
 cli = ArgParser()
 
 class DataProcessConfig(BaseModel):
-    output_dir: str = "data/logic"
-    seq_len: int = 128
+    output_dir: str = "data/logic_chain"
+    seq_len: int = 64
     num_train: int = 50000
     num_test: int = 5000
-    num_vars: int = 4
-    max_depth: int = 2
+    
+    # Task Specific Configs
+    num_vars: int = 26       # Size of variable pool (A-Z)
+    min_steps: int = 2       # Min length of chain (A->B->C is 2 steps)
+    max_steps: int = 6       # Max length of chain
+    num_distractors: int = 3 # Number of fake rules to add
     seed: int = 42
 
-def eval_logic_expr(expr_str: str, env: Dict[str, bool]) -> Optional[bool]:
-    """Evaluate logical expression with variable assignments."""
-    try:
-        py_expr = (expr_str.replace('&', ' and ').replace('|', ' or ')
-                           .replace('>', ' <= ').replace('~', ' not '))
-        return eval(py_expr, {"__builtins__": {}}, env)
-    except:
-        return None
-
-def get_vars_in_expr(expr: str) -> List[str]:
-    return sorted(list(set([c for c in expr if c in VARS])))
-
-def is_satisfiable(expr_str: str) -> bool:
-    used_vars = get_vars_in_expr(expr_str)
-    if not used_vars:
-        return False
-    for values in itertools.product([False, True], repeat=len(used_vars)):
-        env = dict(zip(used_vars, values))
-        if eval_logic_expr(expr_str, env) is True:
-            return True
-    return False
-
-def get_forced_variables(premises_str: str) -> Dict[str, bool]:
-    """Determine which variables MUST have specific values."""
-    used_vars = get_vars_in_expr(premises_str)
-    if not used_vars:
-        return {}
+def generate_chain_sample(config: DataProcessConfig) -> Tuple[str, str]:
+    """
+    Generates a linear logic chain with distractors.
+    Returns: (input_string, target_string)
+    """
+    # 1. Select variables for the valid chain
+    chain_len = random.randint(config.min_steps, config.max_steps)
+    available_vars = VARS[:config.num_vars]
     
-    forced = {}
-    satisfying = []
-    
-    for values in itertools.product([False, True], repeat=len(used_vars)):
-        env = dict(zip(used_vars, values))
-        if eval_logic_expr(premises_str, env) is True:
-            satisfying.append(env)
-    
-    if not satisfying:
-        return {}
-    
-    # Variable is forced if same value in ALL satisfying assignments
-    for var in used_vars:
-        values = [a[var] for a in satisfying]
-        if all(values):
-            forced[var] = True
-        elif not any(values):
-            forced[var] = False
-    
-    return forced
-
-def generate_random_expr(vocab_subset: List[str], depth: int = 0, max_depth: int = 2) -> str:
-    if depth >= max_depth or (depth > 0 and random.random() < 0.4):
-        return random.choice(vocab_subset)
-    
-    op = random.choice(['&', '|', '>', '~'])
-    if op == '~':
-        return f"~({generate_random_expr(vocab_subset, depth+1, max_depth)})"
-    else:
-        left = generate_random_expr(vocab_subset, depth+1, max_depth)
-        right = generate_random_expr(vocab_subset, depth+1, max_depth)
-        return f"({left}{op}{right})"
-
-def generate_premise_with_forced_vars(vocab_subset: List[str], max_depth: int) -> Tuple[str, Dict[str, bool]]:
-    """Generate premises that force at least 2 variables."""
-    for _ in range(100):
-        # Create facts and implication chains
-        num_facts = random.randint(1, 2)
-        fact_vars = random.sample(vocab_subset, min(num_facts, len(vocab_subset)))
+    # Ensure we have enough vars
+    if len(available_vars) < chain_len + 1:
+        available_vars = VARS # Fallback to all if pool is too small
         
-        clauses = []
-        for var in fact_vars:
-            clauses.append(var if random.random() < 0.7 else f"~({var})")
+    chain_vars = random.sample(available_vars, chain_len + 1)
+    
+    # Define the ground truth path: A -> B -> C
+    true_rules = []
+    for i in range(len(chain_vars) - 1):
+        source = chain_vars[i]
+        target = chain_vars[i+1]
+        true_rules.append((source, target))
+    
+    start_fact = chain_vars[0]
+    ground_truth_sequence = chain_vars[1:] # The solution path (B, C...)
+
+    # 2. Add Distractors
+    # We must ensure distractors do not create cycles or shortcuts
+    distractor_rules = []
+    existing_edges = set(true_rules)
+    
+    attempts = 0
+    while len(distractor_rules) < config.num_distractors and attempts < 100:
+        attempts += 1
+        s, t = random.sample(available_vars, 2)
         
-        # Add implications
-        remaining = [v for v in vocab_subset if v not in fact_vars]
-        if remaining and fact_vars:
-            for _ in range(random.randint(1, 3)):
-                ant = random.choice(fact_vars)
-                cons = random.choice(remaining)
-                clauses.append(f"({ant}>{cons})")
+        # Validation
+        if s == t: continue
+        if (s, t) in existing_edges: continue
         
-        premises_str = "&".join(f"({c})" for c in clauses)
+        # Check for cycles/shortcuts using a temp graph
+        temp_edges = true_rules + distractor_rules + [(s, t)]
+        G = nx.DiGraph(temp_edges)
         
-        if not is_satisfiable(premises_str):
+        if not nx.is_directed_acyclic_graph(G):
             continue
-        
-        forced = get_forced_variables(premises_str)
-        
-        # Quality: Need ≥2 forced vars, at least 1 derived (not just facts)
-        if len(forced) >= 2:
-            derived = [v for v in forced if v not in fact_vars]
-            if derived:
-                return premises_str, forced
-    
-    # Fallback
-    v1, v2 = vocab_subset[0], vocab_subset[1]
-    premises = f"({v1})&({v1}>{v2})"
-    return premises, get_forced_variables(premises)
+            
+        # Ensure we didn't accidentally create a shortcut from Start to End
+        # BFS from start_fact should still produce the exact same path length to the end
+        try:
+            path = nx.shortest_path(G, source=start_fact, target=chain_vars[-1])
+            if len(path) != len(chain_vars):
+                continue # A shortcut was created
+        except nx.NetworkXNoPath:
+            pass # This is fine, it means the distractor is disconnected or downstream
+            
+        distractor_rules.append((s, t))
+        existing_edges.add((s, t))
 
-def tokenize(text: str, seq_len: int) -> Optional[np.ndarray]:
-    tokens = []
-    i = 0
-    while i < len(text):
-        if text[i] in VOCAB:
-            tokens.append(VOCAB[text[i]])
-            i += 1
-        else:
-            i += 1
+    # 3. Format Strings
+    all_rules = true_rules + distractor_rules
+    random.shuffle(all_rules) # Shuffle to remove positional clues
     
+    # Format: "A>B"
+    rule_strs = [f"{r[0]}>{r[1]}" for r in all_rules]
+    
+    # Input: "Facts: A | Rules: C>D A>B"
+    input_str = f"Facts: {start_fact} | Rules: {' '.join(rule_strs)} | Target:"
+    
+    # Output: "B C" (The sequence of deduction)
+    target_str = " ".join(ground_truth_sequence)
+    
+    return input_str, target_str
+
+def tokenize(text: str, seq_len: int = 64) -> Optional[List[int]]:
+    """
+    Tokenizes the string based on space separation and custom logic.
+    """
+    tokens = []
+    # Split by space to handle keywords like "Facts:" cleanly
+    raw_tokens = text.split(' ')
+    
+    for rt in raw_tokens:
+        if rt in VOCAB:
+            tokens.append(VOCAB[rt])
+        else:
+            # Handle composite tokens like "A>B" or "Target:" if missed
+            # We assume inputs are clean, but let's be robust
+            # If "A>B", split into A, >, B
+            if '>' in rt and len(rt) > 1:
+                parts = rt.partition('>')
+                for p in parts:
+                    if p in VOCAB:
+                        tokens.append(VOCAB[p])
+            else:
+                # Fallback (should not happen with this generator)
+                pass
+
     if len(tokens) > seq_len - 1:
         return None
-    
-    tokens.append(VOCAB['end'])
-    tokens.extend([VOCAB['pad']] * (seq_len - len(tokens)))
-    return np.array(tokens, dtype=np.int32)
-
-def generate_sample(seq_len: int, num_vars: int, max_depth: int) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-    vocab_subset = VARS[:num_vars]
-    premises, forced = generate_premise_with_forced_vars(vocab_subset, max_depth)
-    
-    if not forced:
-        return None, None
-    
-    # Create assignment sequence
-    sorted_vars = sorted(forced.keys())
-    assignments = [f"{v}={'T' if forced[v] else 'F'}" for v in sorted_vars]
-    
-    input_str = f"{premises}#"
-    output_str = f"{premises}#{','.join(assignments)}"
-    
-    inp = tokenize(input_str, seq_len)
-    out = tokenize(output_str, seq_len)
-    
-    return (inp, out) if inp is not None and out is not None else (None, None)
-
-def generate_dataset(set_name: str, config: DataProcessConfig, num_samples: int):
-    np.random.seed(config.seed if set_name == "train" else config.seed + 1)
-    random.seed(config.seed if set_name == "train" else config.seed + 1)
-    
-    results = {"inputs": [], "labels": [], "puzzle_indices": [0], 
-               "group_indices": [0], "puzzle_identifiers": []}
-    
-    pbar = tqdm(total=num_samples, desc=f"Generating {set_name}")
-    example_id = puzzle_id = 0
-    
-    while example_id < num_samples:
-        inp, out = generate_sample(config.seq_len, config.num_vars, config.max_depth)
-        if inp is None:
-            continue
         
-        results["inputs"].append(inp)
-        results["labels"].append(out)
-        example_id += 1
-        puzzle_id += 1
-        results["puzzle_indices"].append(example_id)
-        results["puzzle_identifiers"].append(0)
-        results["group_indices"].append(puzzle_id)
-        pbar.update(1)
+    # Pad
+    tokens.append(VOCAB['end'])
+    padding = [VOCAB['pad']] * (seq_len - len(tokens))
+    tokens = tokens + padding
+    return tokens
+
+# Dataset generation
+def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
+    np.random.seed(config.seed)
+    random.seed(config.seed)
+
+    results = {k: [] for k in ["inputs", "labels", "puzzle_indices", "group_indices", "puzzle_identifiers"]}
+    puzzle_id = 0
+    example_id = 0
     
-    pbar.close()
+    # Initial indices
+    results["puzzle_indices"].append(0)
+    results["group_indices"].append(0)
+
+    # Counters for valid samples
+    valid_count = 0
     
-    dataset = {k: np.stack(v) if k in ["inputs", "labels"] else np.array(v, dtype=np.int32) 
-               for k, v in results.items()}
-    
-    metadata = {
-        "seq_len": config.seq_len, "vocab_size": len(VOCAB), "pad_id": 0,
-        "ignore_label_id": 0, "blank_identifier_id": 0, "num_puzzle_identifiers": 1,
-        "total_groups": puzzle_id, "mean_puzzle_examples": 1.0,
-        "total_puzzles": puzzle_id, "sets": ["all"]
+    with tqdm(total=num_samples, desc=f"Generating {set_name}") as pbar:
+        while valid_count < num_samples:
+            inp_str, targ_str = generate_chain_sample(config)
+            
+            # Create full sequence for training: Input + Target
+            # But the model inputs should just be Input, labels should be Input+Target
+            # TRM usually expects:
+            # Input:  [Tokens....]
+            # Label:  [Tokens....] (Shifted or masked)
+            
+            # Based on your previous snippet, you want:
+            # Input: "Problem |-"
+            # Label: "Problem |- Answer"
+            
+            # Adapting to our format:
+            full_text = f"{inp_str} {targ_str}"
+            
+            # Tokenize
+            # For TRM 'input' usually masks the answer or provides the prompt
+            input_tokens = tokenize(inp_str, config.seq_len)
+            label_tokens = tokenize(full_text, config.seq_len)
+            
+            if (input_tokens is None) or (label_tokens is None):
+                continue 
+            
+            results["inputs"].append(np.array(input_tokens))
+            results["labels"].append(np.array(label_tokens))
+            
+            example_id += 1
+            puzzle_id += 1
+            results["puzzle_indices"].append(example_id)
+            results["puzzle_identifiers"].append(0)
+            results["group_indices"].append(puzzle_id)
+            
+            valid_count += 1
+            pbar.update(1)
+
+    # Convert to numpy arrays
+    final_results = {
+        "inputs": np.stack(results["inputs"]),
+        "labels": np.stack(results["labels"]),
+        "puzzle_indices": np.array(results["puzzle_indices"], dtype=np.int32),
+        "group_indices": np.array(results["group_indices"], dtype=np.int32),
+        "puzzle_identifiers": np.array(results["puzzle_identifiers"], dtype=np.int32),
     }
-    
+
+    # Metadata
+    metadata = {
+        "seq_len": config.seq_len,
+        "vocab_size": len(VOCAB),
+        "pad_id": VOCAB['pad'],
+        "ignore_label_id": 0,
+        "blank_identifier_id": 0,
+        "num_puzzle_identifiers": 1,
+        "total_groups": len(final_results["group_indices"]) - 1,
+        "mean_puzzle_examples": 1.0, # 1 example per puzzle here
+        "total_puzzles": puzzle_id,
+        "sets": ["all"]
+    }
+
+    # Save dataset
     save_dir = os.path.join(config.output_dir, set_name)
     os.makedirs(save_dir, exist_ok=True)
-    for k, v in dataset.items():
-        np.save(os.path.join(save_dir, f"all__{k}.npy"), v)
-    with open(os.path.join(save_dir, "dataset.json"), "w") as f:
-        json.dump(metadata, f, indent=2)
     
-    print(f"\n{set_name}: {num_samples} samples, vocab_size={len(VOCAB)}")
+    for k, v in final_results.items():
+        np.save(os.path.join(save_dir, f"all__{k}.npy"), v)
+        
+    with open(os.path.join(save_dir, "dataset.json"), "w") as f:
+        json.dump(metadata, f, indent=4)
+        
+    # Identifiers file
+    with open(os.path.join(config.output_dir, "identifiers.json"), "w") as f:
+        json.dump(["<blank>"], f)
+        
+    # Save Vocab for later use
+    with open(os.path.join(config.output_dir, "vocab.json"), "w") as f:
+        json.dump(VOCAB, f, indent=4)
 
 @cli.command(singleton=True)
 def preprocess_data(config: DataProcessConfig):
-    os.makedirs(config.output_dir, exist_ok=True)
-    with open(os.path.join(config.output_dir, "identifiers.json"), "w") as f:
-        json.dump([""], f)
-    with open(os.path.join(config.output_dir, "vocab.json"), "w") as f:
-        json.dump(VOCAB, f, indent=2)
-    
-    generate_dataset("train", config, config.num_train)
-    generate_dataset("test", config, config.num_test)
-    print(f"\n✓ Complete! Output: {config.output_dir}")
+    print(f"Generating Linear Chain Logic Dataset in: {config.output_dir}")
+    convert_subset("train", config, config.num_train)
+    convert_subset("test", config, config.num_test)
 
 if __name__ == "__main__":
     cli()
