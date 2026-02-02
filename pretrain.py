@@ -650,6 +650,23 @@ def launch(hydra_config: DictConfig):
 
             if config.ema:
                 del train_state_eval
+    
+    if RANK == 0:
+        print("Saving model to /kaggle/working/...")
+        
+        # Select model (Use EMA weights if enabled, otherwise standard weights)
+        model_to_save = train_state.model
+        if config.ema and ema_helper is not None:
+            print("Applying EMA weights for save...")
+            model_to_save = ema_helper.ema_copy(train_state.model)
+
+        # Handle unwrapping (if compiled or wrapped)
+        state_dict_to_save = model_to_save.module.state_dict() if hasattr(model_to_save, "module") else model_to_save.state_dict()
+        
+        # Save Weights
+        save_path = "/kaggle/working/final_model.pt"
+        torch.save(state_dict_to_save, save_path)
+        print(f"✅ Model saved successfully to: {save_path}")           
 
     # finalize
     if dist.is_initialized():
