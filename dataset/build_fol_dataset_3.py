@@ -12,7 +12,7 @@ from tqdm import tqdm
 # Vars: A-Z
 # Structure: Facts, Rules, Target, >, &, | (separator), end, pad
 VARS = list(string.ascii_uppercase)
-SPECIALS = ['Facts:', 'Rules:', 'Target:', '>', '&', '|', 'end', 'pad']
+SPECIALS = ['Facts:', 'Rules:', 'Target:', '>', '&', '|']
 
 VOCAB = {
     'pad': 0,
