@@ -586,7 +586,12 @@ def launch(hydra_config: DictConfig):
         print("No evaluator found")
         evaluators = []
 
-    # Train state
+    # Init train state
+    if RANK == 0:
+        print(f"DEBUG: arch.puzzle_emb_ndim = {config.arch.puzzle_emb_ndim}")
+        print(f"DEBUG: arch.num_puzzle_identifiers = {config.arch.num_puzzle_identifiers}")
+        print(f"DEBUG: Dataset metadata num_puzzle_identifiers = {train_metadata.num_puzzle_identifiers}")
+
     train_state = init_train_state(config, train_metadata, rank=RANK, world_size=WORLD_SIZE)
 
     # Progress bar and logger
