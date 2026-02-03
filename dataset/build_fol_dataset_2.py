@@ -125,9 +125,10 @@ def convert_subset(set_name, config, num):
                 results["puzzle_indices"].append(e_id)
                 results["group_indices"].append(p_id)
                 
-                # FIXED: Use a single shared ID (0) for all logic samples
-                # This treats the logic task as a single "puzzle" type to learn 
-                results["puzzle_identifiers"].append(0) 
+                # OLD FIX REVERTED: Use unique IDs to avoid gradient explosion in SparseEmbedding
+                # Because SparseEmbedding sums gradients for the same ID, using ID=0 for all 768 samples 
+                # effectively multiplies LR by 768, causing instability.
+                results["puzzle_identifiers"].append(valid) 
                 
                 valid += 1
                 pbar.update(1)
@@ -157,7 +158,7 @@ def convert_subset(set_name, config, num):
             "pad_id": 0,
             "ignore_label_id": 0,
             "blank_identifier_id": 0,
-            "num_puzzle_identifiers": 1, # FIXED: Only 1 type of "puzzle" (logic chain)
+            "num_puzzle_identifiers": valid, # Reverted to unique IDs
             "total_groups": p_id,
             "mean_puzzle_examples": 1.0,
             "total_puzzles": p_id,
@@ -169,7 +170,7 @@ def convert_subset(set_name, config, num):
         json.dump(VOCAB, f)
     with open(os.path.join(config.output_dir, "identifiers.json"), "w") as f: 
         # Create a list of identifiers matching the 'valid' count
-        json.dump(["logic_task"], f)
+        json.dump([f"logic_{i}" for i in range(valid)], f)
 
 
 @cli.command(singleton=True)

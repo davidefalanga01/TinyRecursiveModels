@@ -147,22 +147,28 @@ def tokenize(text: str, seq_len: int) -> Optional[List[int]]:
     raw_parts = text.split(' ')
     
     for part in raw_parts:
+        if not part: continue # Skip empty strings
+        
         # Check if exact match
         if part in VOCAB:
             tokens.append(VOCAB[part])
             continue
             
         # Parse composite "A&B>C"
-        # We scan char by char or use regex, but simple parsing works for this grammar
+        # We allow A, B, C, &, >, |
         buffer = ""
         for char in part:
-            if char in ['&', '>']:
-                if buffer in VOCAB: tokens.append(VOCAB[buffer])
+            if char in ['&', '>', '|']:
+                if buffer and buffer in VOCAB: 
+                    tokens.append(VOCAB[buffer])
                 tokens.append(VOCAB[char])
                 buffer = ""
             else:
                 buffer += char
-        if buffer in VOCAB: tokens.append(VOCAB[buffer])
+        
+        # Flush buffer
+        if buffer and buffer in VOCAB: 
+            tokens.append(VOCAB[buffer])
 
     if len(tokens) > seq_len - 1:
         return None
@@ -173,9 +179,8 @@ def tokenize(text: str, seq_len: int) -> Optional[List[int]]:
 
 # --- Standard Dataset Boilerplate (Same as before) ---
 def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
-    np.random.seed(config.seed)
-    random.seed(config.seed)
-
+    # FIXED: Do not reset seed here!
+    
     results = {k: [] for k in ["inputs", "labels", "puzzle_indices", "group_indices", "puzzle_identifiers"]}
     puzzle_id = 0
     example_id = 0
@@ -201,7 +206,7 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
             example_id += 1
             puzzle_id += 1
             results["puzzle_indices"].append(example_id)
-            results["puzzle_identifiers"].append(0)
+            results["puzzle_identifiers"].append(valid_count) # Using Unique ID (0-based)
             results["group_indices"].append(puzzle_id)
             
             valid_count += 1
@@ -221,7 +226,7 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
         "pad_id": VOCAB['pad'],
         "ignore_label_id": 0,
         "blank_identifier_id": 0,
-        "num_puzzle_identifiers": 1,
+        "num_puzzle_identifiers": valid_count,
         "total_groups": len(final_results["group_indices"]) - 1,
         "total_puzzles": puzzle_id,
         "sets": ["all"]
@@ -234,12 +239,16 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
     with open(os.path.join(save_dir, "dataset.json"), "w") as f:
         json.dump(metadata, f)
     with open(os.path.join(config.output_dir, "identifiers.json"), "w") as f:
-        json.dump(["<blank>"], f)
+        json.dump([f"logic_{i}" for i in range(valid_count)], f)
     with open(os.path.join(config.output_dir, "vocab.json"), "w") as f:
         json.dump(VOCAB, f)
 
 @cli.command(singleton=True)
 def preprocess_data(config: DataProcessConfig):
+    # Set global seed once
+    random.seed(config.seed)
+    np.random.seed(config.seed)
+
     print(f"Generating Branching Logic in: {config.output_dir}")
     convert_subset("train", config, config.num_train)
     convert_subset("test", config, config.num_test)
