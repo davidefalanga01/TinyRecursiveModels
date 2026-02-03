@@ -91,7 +91,9 @@ def tokenize(text: str, seq_len: int = 64) -> Optional[List[int]]:
     return tokens
 
 def convert_subset(set_name, config, num):
-    np.random.seed(config.seed); random.seed(config.seed)
+    # Fix: Do NOT reset seed here with the same value for every subset
+    # np.random.seed(config.seed); random.seed(config.seed) 
+    
     # Initialize results dictionary
     results = {k: [] for k in ["inputs", "labels", "puzzle_indices", "group_indices", "puzzle_identifiers"]}
     
@@ -108,7 +110,7 @@ def convert_subset(set_name, config, num):
         while valid < num:
             inp, targ = generate_chain_sample(config)
             full = f"{inp} {targ}"
-            it, ot = tokenize(inp, config.seq_len)
+            it = tokenize(inp, config.seq_len)
             ft = tokenize(full, config.seq_len) # Full tokenized sequence
             
             if it and ft:
@@ -123,9 +125,9 @@ def convert_subset(set_name, config, num):
                 results["puzzle_indices"].append(e_id)
                 results["group_indices"].append(p_id)
                 
-                # IMPORTANT: Each sample is its own "puzzle" for logic reasoning
-                # Use 'valid' as a unique ID so the model can learn unique embeddings if it needs to
-                results["puzzle_identifiers"].append(valid) 
+                # FIXED: Use a single shared ID (0) for all logic samples
+                # This treats the logic task as a single "puzzle" type to learn 
+                results["puzzle_identifiers"].append(0) 
                 
                 valid += 1
                 pbar.update(1)
@@ -155,7 +157,7 @@ def convert_subset(set_name, config, num):
             "pad_id": 0,
             "ignore_label_id": 0,
             "blank_identifier_id": 0,
-            "num_puzzle_identifiers": valid, # Updated to match unique IDs
+            "num_puzzle_identifiers": 1, # FIXED: Only 1 type of "puzzle" (logic chain)
             "total_groups": p_id,
             "mean_puzzle_examples": 1.0,
             "total_puzzles": p_id,
@@ -167,11 +169,15 @@ def convert_subset(set_name, config, num):
         json.dump(VOCAB, f)
     with open(os.path.join(config.output_dir, "identifiers.json"), "w") as f: 
         # Create a list of identifiers matching the 'valid' count
-        json.dump([f"logic_{i}" for i in range(valid)], f)
+        json.dump(["logic_task"], f)
 
 
 @cli.command(singleton=True)
 def preprocess_data(config: DataProcessConfig):
+    # Set global seed once
+    random.seed(config.seed)
+    np.random.seed(config.seed)
+    
     print(f"Generating FIXED Logic Chain in: {config.output_dir}")
     convert_subset("train", config, config.num_train)
     convert_subset("test", config, config.num_test)
