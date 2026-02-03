@@ -92,57 +92,82 @@ def tokenize(text: str, seq_len: int = 64) -> Optional[List[int]]:
 
 def convert_subset(set_name, config, num):
     np.random.seed(config.seed); random.seed(config.seed)
+    # Initialize results dictionary
     results = {k: [] for k in ["inputs", "labels", "puzzle_indices", "group_indices", "puzzle_identifiers"]}
-    p_id, e_id = 0, 0
-    results["puzzle_indices"].append(0); results["group_indices"].append(0)
+    
+    # Track sequence and puzzle counts
+    e_id = 0 # example id
+    p_id = 0 # puzzle id
+    
+    # Start indices (required by the original paper's data loader)
+    results["puzzle_indices"].append(0) 
+    results["group_indices"].append(0)
     
     valid = 0
     with tqdm(total=num, desc=f"Generating {set_name}") as pbar:
         while valid < num:
             inp, targ = generate_chain_sample(config)
             full = f"{inp} {targ}"
-            it, ot = tokenize(inp, config.seq_len), tokenize(full, config.seq_len)
+            it, ot = tokenize(inp, config.seq_len)
+            ft = tokenize(full, config.seq_len) # Full tokenized sequence
             
-            if it and ot:
+            if it and ft:
                 results["inputs"].append(np.array(it))
-                results["labels"].append(np.array(ot))
-                e_id += 1; p_id += 1
+                results["labels"].append(np.array(ft))
+                
+                # Update counters
+                e_id += 1 
+                p_id += 1
+                
+                # Append indices for this batch
                 results["puzzle_indices"].append(e_id)
                 results["group_indices"].append(p_id)
-                results["puzzle_identifiers"].append(0)
-                valid += 1; pbar.update(1)
+                
+                # IMPORTANT: Each sample is its own "puzzle" for logic reasoning
+                # Use 'valid' as a unique ID so the model can learn unique embeddings if it needs to
+                results["puzzle_identifiers"].append(valid) 
+                
+                valid += 1
+                pbar.update(1)
 
-
-    final = {k: np.array(v) if k!="puzzle_identifiers" else np.array(v, dtype=np.int32) for k,v in results.items()}
-    final["puzzle_identifiers"] = np.array(results["puzzle_identifiers"], dtype=np.int32)
-    final["inputs"] = np.stack(results["inputs"])
-    final["labels"] = np.stack(results["labels"])
+    # Convert to numpy arrays
+    final_inputs = np.stack(results["inputs"])
+    final_labels = np.stack(results["labels"])
+    final_puzzle_identifiers = np.array(results["puzzle_identifiers"], dtype=np.int32)
+    final_puzzle_indices = np.array(results["puzzle_indices"], dtype=np.int32)
+    final_group_indices = np.array(results["group_indices"], dtype=np.int32)
     
+    # Save the files
     save_dir = os.path.join(config.output_dir, set_name)
     os.makedirs(save_dir, exist_ok=True)
-    for k,v in final.items(): 
-        np.save(os.path.join(save_dir, f"all__{k}.npy"), v)
     
-    # ===== FIX: Add all required metadata fields =====
+    np.save(os.path.join(save_dir, "all__inputs.npy"), final_inputs)
+    np.save(os.path.join(save_dir, "all__labels.npy"), final_labels)
+    np.save(os.path.join(save_dir, "all__puzzle_identifiers.npy"), final_puzzle_identifiers)
+    np.save(os.path.join(save_dir, "all__puzzle_indices.npy"), final_puzzle_indices)
+    np.save(os.path.join(save_dir, "all__group_indices.npy"), final_group_indices)
+    
+    # Update dataset.json with the CORRECT number of puzzle identifiers
     with open(os.path.join(save_dir, "dataset.json"), "w") as f:
         json.dump({
             "seq_len": config.seq_len,
             "vocab_size": len(VOCAB),
             "pad_id": 0,
-            "ignore_label_id": 0,  # Added
-            "blank_identifier_id": 0,  # Added
-            "num_puzzle_identifiers": 1,  # Added
-            "total_groups": p_id,  # Added
-            "mean_puzzle_examples": 1.0,  # Added (each puzzle has 1 example)
-            "total_puzzles": p_id,  # Added
+            "ignore_label_id": 0,
+            "blank_identifier_id": 0,
+            "num_puzzle_identifiers": valid, # Updated to match unique IDs
+            "total_groups": p_id,
+            "mean_puzzle_examples": 1.0,
+            "total_puzzles": p_id,
             "sets": ["all"]
         }, f)
-    # ===== END FIX =====
     
+    # Save general vocab and identifiers (needed once per dataset)
     with open(os.path.join(config.output_dir, "vocab.json"), "w") as f: 
         json.dump(VOCAB, f)
     with open(os.path.join(config.output_dir, "identifiers.json"), "w") as f: 
-        json.dump(["<blank>"], f)
+        # Create a list of identifiers matching the 'valid' count
+        json.dump([f"logic_{i}" for i in range(valid)], f)
 
 
 @cli.command(singleton=True)
