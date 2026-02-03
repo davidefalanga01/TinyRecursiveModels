@@ -137,7 +137,7 @@ def generate_branching_sample(config: DataProcessConfig) -> Tuple[str, str]:
         
     # Input: "Facts: A B | Rules: A&B>C D>E ..."
     input_str = f"Facts: {' '.join(start_facts_list)} | Rules: {' '.join(rule_strs)} | Target:"
-    target_str = " ".join(ground_truth_sequence)
+    target_str = " ".join(sorted(ground_truth_sequence))
     
     return input_str, target_str
 
