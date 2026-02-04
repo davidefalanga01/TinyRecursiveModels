@@ -263,6 +263,7 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
             "total_groups": len(final_results["group_indices"]) - 1,
             "mean_puzzle_examples": 1.0,
             "num_puzzle_identifiers": valid_count,
+            "total_puzzles": valid_count,
             "sets": ["all"]
         }, f)
     with open(os.path.join(config.output_dir, "identifiers.json"), "w") as f:
