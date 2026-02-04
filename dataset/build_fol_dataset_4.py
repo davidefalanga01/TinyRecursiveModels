@@ -258,6 +258,10 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
             "seq_len": config.seq_len,
             "vocab_size": len(VOCAB),
             "pad_id": VOCAB['pad'],
+            "ignore_label_id": 0,
+            "blank_identifier_id": 0,
+            "total_groups": len(final_results["group_indices"]) - 1,
+            "mean_puzzle_examples": 1.0,
             "num_puzzle_identifiers": valid_count,
             "sets": ["all"]
         }, f)
