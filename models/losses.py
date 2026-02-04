@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 import math
+import numpy as np
 
 IGNORE_LABEL_ID = 0
 
@@ -87,10 +88,21 @@ class ACTLossHead(nn.Module):
             
             for b in range(batch_size):
                 # Filter out ignored tokens and padding (usually 0)
-                # We assume 0 is pad, but strictly we use the mask
                 l_set = set(cpu_labels[b][cpu_mask[b]])
-                p_set = set(cpu_preds[b][cpu_mask[b]])
                 
+                # For preds, we want to start from the first valid label index (skipping prompt)
+                # and verify ALL tokens predicted after that (including hallucinations in padding region).
+                # cpu_mask only selects indices where label is valid, effectively truncating preds to target length.
+                valid_indices = np.nonzero(cpu_mask[b])[0]
+                if len(valid_indices) > 0:
+                    start_idx = valid_indices[0]
+                    p_seq = cpu_preds[b][start_idx:]
+                    p_set = set(p_seq[p_seq != IGNORE_LABEL_ID])
+                else:
+                    # If full sequence is ignored (no target), everything predicted is hallucination?
+                    # Or we just use full sequence?
+                    p_set = set(cpu_preds[b][cpu_preds[b] != IGNORE_LABEL_ID])
+
                 # Check for set equality
                 set_matches.append(l_set == p_set)
                 
