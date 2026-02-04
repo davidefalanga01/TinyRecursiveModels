@@ -3,14 +3,12 @@ import json
 import string
 import random
 import numpy as np
-from typing import Optional, List, Tuple, Set
+import collections
+from typing import Optional, List, Tuple, Set, Dict
 from pydantic import BaseModel
 from argdantic import ArgParser
 from tqdm import tqdm
 
-# --- Vocabulary Definition ---
-# Vars: A-Z
-# Structure: Facts, Rules, Target, >, &, | (separator), end, pad
 VARS = list(string.ascii_uppercase)
 SPECIALS = ['Facts:', 'Rules:', 'Target:', '>', '&', '|']
 
@@ -20,167 +18,141 @@ VOCAB = {
     **{v: i + 2 for i, v in enumerate(VARS)},
     **{s: i + 2 + len(VARS) for i, s in enumerate(SPECIALS)}
 }
-INV_VOCAB = {v: k for k, v in VOCAB.items()}
 
 cli = ArgParser()
 
 class DataProcessConfig(BaseModel):
     output_dir: str = "data/logic_branching"
-    seq_len: int = 128          # Increased len (branching rules are longer)
+    seq_len: int = 128
     num_train: int = 50000
     num_test: int = 5000
-    
-    # Task Specific Configs
-    num_vars: int = 26          # A-Z
-    min_layers: int = 2         # Min depth of reasoning
-    max_layers: int = 6         # Max depth
-    branch_prob: float = 0.5    # Probability a rule is (A & B > C) vs (A > C)
-    num_distractors: int = 4    # Fake rules
+    num_vars: int = 26
+    min_layers: int = 2
+    max_layers: int = 6
+    branch_prob: float = 0.5
+    num_distractors: int = 4
     seed: int = 42
 
+def get_stratified_target(start_facts: Set[str], rules: List[Tuple[List[str], str]]) -> List[str]:
+    """
+    Simulates the logic flow to assign a DEPTH to each derived fact.
+    Returns facts sorted by (Depth, Name).
+    """
+    known = {f: 0 for f in start_facts} # Fact -> Depth
+    derived = []
+    
+    # Simple forward chaining to determine depth
+    changed = True
+    while changed:
+        changed = False
+        # Iterate over rules to see what activates
+        for premises, target in rules:
+            if target in known: continue
+            
+            # Check if all premises are known
+            if all(p in known for p in premises):
+                # Depth = max(premise_depths) + 1
+                new_depth = max(known[p] for p in premises) + 1
+                known[target] = new_depth
+                derived.append((new_depth, target))
+                changed = True
+    
+    # Sort by Depth first, then Alphabetical
+    # x[0] is depth, x[1] is name
+    derived.sort(key=lambda x: (x[0], x[1]))
+    
+    return [x[1] for x in derived]
+
 def generate_branching_sample(config: DataProcessConfig) -> Tuple[str, str]:
-    """
-    Generates a Horn Clause derivation graph.
-    Guarantees a deterministic path of discovery.
-    """
     available_vars = VARS[:config.num_vars]
     
     # 1. Initialize State
-    # Pick 2-3 start facts
     num_start = random.randint(2, 3)
     known_facts = set(random.sample(available_vars, num_start))
     start_facts_list = sorted(list(known_facts))
     
-    # Track used variables to avoid re-discovering the same fact
     used_vars = set(known_facts)
-    
     true_rules = []
-    ground_truth_sequence = []
     
-    # 2. Build the Derivation Chain (Layer by Layer)
-    # We construct the "solution" forward, ensuring it's valid.
+    # 2. Build the Derivation Graph
     num_layers = random.randint(config.min_layers, config.max_layers)
     
     for _ in range(num_layers):
-        # We need to deduce a NEW variable
-        # Potential targets are variables we haven't used yet
         potential_targets = [v for v in available_vars if v not in used_vars]
-        if not potential_targets:
-            break
+        if not potential_targets: break
             
         target = random.choice(potential_targets)
-        
-        # Decide if this rule is Simple (A > C) or Branching (A & B > C)
-        # We must pick premises from 'known_facts'
         is_branching = random.random() < config.branch_prob
         
-        # For branching, we need at least 2 known facts
         if is_branching and len(known_facts) >= 2:
             premises = random.sample(list(known_facts), 2)
         else:
             premises = random.sample(list(known_facts), 1)
             
-        # Store the rule
-        # Format: (['A', 'B'], 'C')
         true_rules.append((premises, target))
-        
-        # Update State
         known_facts.add(target)
         used_vars.add(target)
-        ground_truth_sequence.append(target)
 
     # 3. Add Distractors
-    # Distractors must NOT fire.
-    # Easiest way: Ensure at least one premise is NOT in the final 'known_facts'.
-    # OR: The target is already known (redundant/cyclic).
-    # But to be safe and clean, we use variables that are never true.
-    
     distractor_rules = []
     attempts = 0
     while len(distractor_rules) < config.num_distractors and attempts < 200:
         attempts += 1
-        
-        # Pick random variables
         s_count = 2 if random.random() < config.branch_prob else 1
         s = random.sample(available_vars, s_count)
         t = random.choice(available_vars)
         
-        # Rule Validation:
-        # 1. Don't replicate an existing rule
+        # Validation: Don't replicate existing, don't accidentally fire
         if any((set(s) == set(tr[0]) and t == tr[1]) for tr in true_rules + distractor_rules):
             continue
-            
-        # 2. Critical: Ensure this rule doesn't accidentally trigger using valid facts
-        # If all 's' are in the final 'known_facts', this rule would fire!
-        # We want strict control. So, valid distractors usually involve an 'Unknown' variable.
-        # But for difficulty, let's allow "Dead Ends":
-        # Rules that fire but lead to a variable we don't care about?
-        # No, to keep it simple: Distractors should FAIL to fire.
-        
-        # Check if premises are a subset of the TRUE facts
         if set(s).issubset(known_facts):
-            # If it fires, does it mess up our order? 
-            # It creates a parallel true path. Let's avoid this for now to keep Target deterministic.
             continue
             
         distractor_rules.append((s, t))
 
-    # 4. Format Output
+    # 4. Format Output with Stratified Sorting
     all_rules = true_rules + distractor_rules
     random.shuffle(all_rules)
     
-    # Stringify rules: "A&B>C" or "A>B"
     rule_strs = []
     for premises, target in all_rules:
-        lhs = "&".join(premises)
+        # Sort premises for canonical representation (optional but clean)
+        lhs = "&".join(sorted(premises)) 
         rule_strs.append(f"{lhs}>{target}")
-        
-    # Input: "Facts: A B | Rules: A&B>C D>E ..."
+    
+    # Calculate the Stratified Target
+    sorted_ground_truth = get_stratified_target(set(start_facts_list), true_rules)
+
     input_str = f"Facts: {' '.join(start_facts_list)} | Rules: {' '.join(rule_strs)} | Target:"
-    target_str = " ".join(sorted(ground_truth_sequence))
+    target_str = " ".join(sorted_ground_truth)
     
     return input_str, target_str
 
 def tokenize(text: str, seq_len: int) -> Optional[List[int]]:
     tokens = []
-    # Space splitting
     raw_parts = text.split(' ')
     
     for part in raw_parts:
-        if not part: continue # Skip empty strings
-        
-        # Check if exact match
+        if not part: continue
         if part in VOCAB:
             tokens.append(VOCAB[part])
             continue
-            
-        # Parse composite "A&B>C"
-        # We allow A, B, C, &, >, |
         buffer = ""
         for char in part:
             if char in ['&', '>', '|']:
-                if buffer and buffer in VOCAB: 
-                    tokens.append(VOCAB[buffer])
+                if buffer and buffer in VOCAB: tokens.append(VOCAB[buffer])
                 tokens.append(VOCAB[char])
                 buffer = ""
             else:
                 buffer += char
-        
-        # Flush buffer
-        if buffer and buffer in VOCAB: 
-            tokens.append(VOCAB[buffer])
+        if buffer and buffer in VOCAB: tokens.append(VOCAB[buffer])
 
-    if len(tokens) > seq_len - 1:
-        return None
-        
+    if len(tokens) > seq_len - 1: return None
     tokens.append(VOCAB['end'])
     tokens = tokens + [VOCAB['pad']] * (seq_len - len(tokens))
     return tokens
 
-# --- Standard Dataset Boilerplate (Same as before) ---
 def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
-    # FIXED: Do not reset seed here!
-    
     results = {k: [] for k in ["inputs", "labels", "puzzle_indices", "group_indices", "puzzle_identifiers"]}
     puzzle_id = 0
     example_id = 0
@@ -197,8 +169,7 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
             input_tokens = tokenize(inp_str, config.seq_len)
             label_tokens = tokenize(full_text, config.seq_len)
             
-            if (input_tokens is None) or (label_tokens is None):
-                continue
+            if (input_tokens is None) or (label_tokens is None): continue
                 
             results["inputs"].append(np.array(input_tokens))
             results["labels"].append(np.array(label_tokens))
@@ -206,7 +177,7 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
             example_id += 1
             puzzle_id += 1
             results["puzzle_indices"].append(example_id)
-            results["puzzle_identifiers"].append(valid_count) # Using Unique ID (0-based)
+            results["puzzle_identifiers"].append(valid_count)
             results["group_indices"].append(puzzle_id)
             
             valid_count += 1
@@ -246,11 +217,9 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
 
 @cli.command(singleton=True)
 def preprocess_data(config: DataProcessConfig):
-    # Set global seed once
     random.seed(config.seed)
     np.random.seed(config.seed)
-
-    print(f"Generating Branching Logic in: {config.output_dir}")
+    print(f"Generating Branching Logic (Stratified) in: {config.output_dir}")
     convert_subset("train", config, config.num_train)
     convert_subset("test", config, config.num_test)
 

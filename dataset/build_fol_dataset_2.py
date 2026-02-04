@@ -9,8 +9,6 @@ from pydantic import BaseModel
 from argdantic import ArgParser
 from typing import Optional, List, Tuple
 
-# --- FIX: REMOVED 'end' and 'pad' from SPECIALS ---
-# They are already defined manually as 0 and 1.
 VARS = list(string.ascii_uppercase)
 SPECIALS = ['Facts:', 'Rules:', 'Target:', '>', '|'] 
 
@@ -39,13 +37,17 @@ def generate_chain_sample(config: DataProcessConfig) -> Tuple[str, str]:
     chain_len = random.randint(config.min_steps, config.max_steps)
     available_vars = VARS[:config.num_vars]
     if len(available_vars) < chain_len + 1: available_vars = VARS
-        
+    
+    # 1. Generate the Causal Chain (Ordered by Depth)
     chain_vars = random.sample(available_vars, chain_len + 1)
-    true_rules = [(chain_vars[i], chain_vars[i+1]) for i in range(len(chain_vars) - 1)]
+    
+    # chain_vars[0] is start. chain_vars[1] is depth 1, chain_vars[2] is depth 2...
     start_fact = chain_vars[0]
-    ground_truth = chain_vars[1:]
+    ground_truth = chain_vars[1:] # Strictly ordered by depth: A->B->C implies Target: B C
 
-    # Distractors
+    true_rules = [(chain_vars[i], chain_vars[i+1]) for i in range(len(chain_vars) - 1)]
+
+    # 2. Distractors
     distractor_rules = []
     existing_edges = set(true_rules)
     attempts = 0
@@ -56,8 +58,11 @@ def generate_chain_sample(config: DataProcessConfig) -> Tuple[str, str]:
         
         temp_edges = true_rules + distractor_rules + [(s, t)]
         G = nx.DiGraph(temp_edges)
+        
+        # Prevent cycles
         if not nx.is_directed_acyclic_graph(G): continue
         
+        # Prevent shortcuts (distractors shouldn't create a faster path to the end)
         try:
             if len(nx.shortest_path(G, start_fact, chain_vars[-1])) != len(chain_vars): continue
         except: pass
@@ -69,8 +74,13 @@ def generate_chain_sample(config: DataProcessConfig) -> Tuple[str, str]:
     random.shuffle(all_rules)
     
     rule_strs = [f"{r[0]}>{r[1]}" for r in all_rules]
+    
     input_str = f"Facts: {start_fact} | Rules: {' '.join(rule_strs)} | Target:"
+    
+    # CRITICAL: Do NOT sort ground_truth alphabetically here. 
+    # It must remain sorted by chain depth (which it is, by definition of chain_vars).
     target_str = " ".join(ground_truth)
+    
     return input_str, target_str
 
 def tokenize(text: str, seq_len: int = 64) -> Optional[List[int]]:
@@ -91,17 +101,10 @@ def tokenize(text: str, seq_len: int = 64) -> Optional[List[int]]:
     return tokens
 
 def convert_subset(set_name, config, num):
-    # Fix: Do NOT reset seed here with the same value for every subset
-    # np.random.seed(config.seed); random.seed(config.seed) 
-    
-    # Initialize results dictionary
     results = {k: [] for k in ["inputs", "labels", "puzzle_indices", "group_indices", "puzzle_identifiers"]}
+    e_id = 0 
+    p_id = 0
     
-    # Track sequence and puzzle counts
-    e_id = 0 # example id
-    p_id = 0 # puzzle id
-    
-    # Start indices (required by the original paper's data loader)
     results["puzzle_indices"].append(0) 
     results["group_indices"].append(0)
     
@@ -111,36 +114,28 @@ def convert_subset(set_name, config, num):
             inp, targ = generate_chain_sample(config)
             full = f"{inp} {targ}"
             it = tokenize(inp, config.seq_len)
-            ft = tokenize(full, config.seq_len) # Full tokenized sequence
+            ft = tokenize(full, config.seq_len)
             
             if it and ft:
                 results["inputs"].append(np.array(it))
                 results["labels"].append(np.array(ft))
                 
-                # Update counters
                 e_id += 1 
                 p_id += 1
                 
-                # Append indices for this batch
                 results["puzzle_indices"].append(e_id)
                 results["group_indices"].append(p_id)
-                
-                # OLD FIX REVERTED: Use unique IDs to avoid gradient explosion in SparseEmbedding
-                # Because SparseEmbedding sums gradients for the same ID, using ID=0 for all 768 samples 
-                # effectively multiplies LR by 768, causing instability.
                 results["puzzle_identifiers"].append(valid) 
                 
                 valid += 1
                 pbar.update(1)
 
-    # Convert to numpy arrays
     final_inputs = np.stack(results["inputs"])
     final_labels = np.stack(results["labels"])
     final_puzzle_identifiers = np.array(results["puzzle_identifiers"], dtype=np.int32)
     final_puzzle_indices = np.array(results["puzzle_indices"], dtype=np.int32)
     final_group_indices = np.array(results["group_indices"], dtype=np.int32)
     
-    # Save the files
     save_dir = os.path.join(config.output_dir, set_name)
     os.makedirs(save_dir, exist_ok=True)
     
@@ -150,7 +145,6 @@ def convert_subset(set_name, config, num):
     np.save(os.path.join(save_dir, "all__puzzle_indices.npy"), final_puzzle_indices)
     np.save(os.path.join(save_dir, "all__group_indices.npy"), final_group_indices)
     
-    # Update dataset.json with the CORRECT number of puzzle identifiers
     with open(os.path.join(save_dir, "dataset.json"), "w") as f:
         json.dump({
             "seq_len": config.seq_len,
@@ -158,28 +152,24 @@ def convert_subset(set_name, config, num):
             "pad_id": 0,
             "ignore_label_id": 0,
             "blank_identifier_id": 0,
-            "num_puzzle_identifiers": valid, # Reverted to unique IDs
+            "num_puzzle_identifiers": valid, 
             "total_groups": p_id,
             "mean_puzzle_examples": 1.0,
             "total_puzzles": p_id,
             "sets": ["all"]
         }, f)
     
-    # Save general vocab and identifiers (needed once per dataset)
     with open(os.path.join(config.output_dir, "vocab.json"), "w") as f: 
         json.dump(VOCAB, f)
     with open(os.path.join(config.output_dir, "identifiers.json"), "w") as f: 
-        # Create a list of identifiers matching the 'valid' count
         json.dump([f"logic_{i}" for i in range(valid)], f)
-
 
 @cli.command(singleton=True)
 def preprocess_data(config: DataProcessConfig):
-    # Set global seed once
     random.seed(config.seed)
     np.random.seed(config.seed)
     
-    print(f"Generating FIXED Logic Chain in: {config.output_dir}")
+    print(f"Generating Logic Chain in: {config.output_dir}")
     convert_subset("train", config, config.num_train)
     convert_subset("test", config, config.num_test)
 

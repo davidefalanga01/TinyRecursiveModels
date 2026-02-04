@@ -33,8 +33,6 @@ def stablemax_cross_entropy(logits, labels, ignore_index: int = -100, valid_mask
 
 
 def softmax_cross_entropy(logits, labels, ignore_index: int = -100):
-    # Cast logits to f32
-    # Flatten logits
     return F.cross_entropy(logits.to(torch.float32).view(-1, logits.shape[-1]), labels.to(torch.long).view(-1), ignore_index=ignore_index, reduction="none").view(labels.shape)
 
 
@@ -60,45 +58,72 @@ class ACTLossHead(nn.Module):
 
         with torch.no_grad():
             # Preds
-            outputs["preds"] = torch.argmax(outputs["logits"], dim=-1)
+            preds = torch.argmax(outputs["logits"], dim=-1)
+            outputs["preds"] = preds
 
             # Correctness
             mask = (labels != IGNORE_LABEL_ID)
             loss_counts = mask.sum(-1)
-            loss_divisor = loss_counts.clamp_min(1).unsqueeze(-1)  # Avoid NaNs in division
+            loss_divisor = loss_counts.clamp_min(1).unsqueeze(-1)
 
-            is_correct = mask & (torch.argmax(outputs["logits"], dim=-1) == labels)
+            is_correct = mask & (preds == labels)
             seq_is_correct = is_correct.sum(-1) == loss_counts
             
-            # Metrics (halted)
+            # --- NEW METRIC: SET ACCURACY ---
+            # Used to evaluate logical correctness ignoring order
+            # This is expensive for huge batches, but fine for Tiny Models
+            # We must ignore padding (0) or specialized ignore indices
+            
+            # 1. Extract sets from labels and preds using the mask
+            # Note: This runs on CPU usually because of list comps, or we can use tensor ops if shape is fixed.
+            # Given variable length masking, list comprehension is safer/easier to implement quickly.
+            batch_size = labels.shape[0]
+            set_matches = []
+            
+            # Move to CPU for set operations to avoid cuda sync overhead loop
+            cpu_labels = labels.detach().cpu().numpy()
+            cpu_preds = preds.detach().cpu().numpy()
+            cpu_mask = mask.detach().cpu().numpy()
+            
+            for b in range(batch_size):
+                # Filter out ignored tokens and padding (usually 0)
+                # We assume 0 is pad, but strictly we use the mask
+                l_set = set(cpu_labels[b][cpu_mask[b]])
+                p_set = set(cpu_preds[b][cpu_mask[b]])
+                
+                # Check for set equality
+                set_matches.append(l_set == p_set)
+                
+            set_accuracy_tensor = torch.tensor(set_matches, device=labels.device, dtype=torch.float32)
+
+            # Metrics
             valid_metrics = new_carry.halted & (loss_counts > 0)
             metrics = {
                 "count": valid_metrics.sum(),
                 
                 "accuracy":       torch.where(valid_metrics, (is_correct.to(torch.float32) / loss_divisor).sum(-1), 0).sum(),
                 "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
+                
+                #exact set accuracy (for fol)
+                "set_accuracy": (valid_metrics & set_accuracy_tensor.bool()).sum(),
 
                 "q_halt_accuracy": (valid_metrics & ((outputs["q_halt_logits"] >= 0) == seq_is_correct)).sum(),
                 "steps":          torch.where(valid_metrics, new_carry.steps, 0).sum(),
             }
 
         # Losses
-
         lm_loss = (self.loss_fn(outputs["logits"], labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask) / loss_divisor).sum()
         q_halt_loss = F.binary_cross_entropy_with_logits(outputs["q_halt_logits"], seq_is_correct.to(outputs["q_halt_logits"].dtype), reduction="sum")
         metrics.update({
             "lm_loss": lm_loss.detach(),
             "q_halt_loss": q_halt_loss.detach(),
         })
-        # Q continue (bootstrapping target loss); Alexia: This fits Q-learning, but seems totally unecessary
+
         q_continue_loss = 0
         if "target_q_continue" in outputs:
             q_continue_loss = F.binary_cross_entropy_with_logits(outputs["q_continue_logits"], outputs["target_q_continue"], reduction="sum")
-
             metrics["q_continue_loss"] = q_continue_loss.detach()
-        # Filter outputs for return
+            
         detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
 
         return new_carry, lm_loss + 0.5 * (q_halt_loss + q_continue_loss), metrics, detached_outputs, new_carry.halted.all()
-
-
