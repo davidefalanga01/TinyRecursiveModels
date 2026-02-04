@@ -103,6 +103,12 @@ class ACTLossHead(nn.Module):
                     # Or we just use full sequence?
                     p_set = set(cpu_preds[b][cpu_preds[b] != IGNORE_LABEL_ID])
 
+                # Filtering: Keep only Variable Tokens (Indices 2-27).
+                # Indices >= 28 are formatting specials (|, &, >, Facts:, etc.)
+                # This ensures the metric measures Logic Correctness, not Syntax Correctness.
+                l_set = {x for x in l_set if x < 28}
+                p_set = {x for x in p_set if x < 28}
+
                 # Check for set equality
                 set_matches.append(l_set == p_set)
                 
