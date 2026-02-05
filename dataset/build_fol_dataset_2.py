@@ -24,7 +24,7 @@ cli = ArgParser()
 
 class DataProcessConfig(BaseModel):
     output_dir: str = "data/logic_chain"
-    seq_len: int = 64
+    seq_len: int = 256
     num_train: int = 50000
     num_test: int = 5000
     num_vars: int = 26
