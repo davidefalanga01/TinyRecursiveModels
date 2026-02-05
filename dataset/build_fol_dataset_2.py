@@ -238,9 +238,9 @@ def convert_subset(set_name, config, num):
 
 def main():
     parser = argparse.ArgumentParser(description="Generate Logic Chain Dataset")
-    parser.add_argument("--output_dir", type=str, default="data/logic_chain_optimized")
-    parser.add_argument("--num_train", type=int, default=20000)
-    parser.add_argument("--num_test", type=int, default=2000)
+    parser.add_argument("--output-dir", type=str, default="data/logic_chain")
+    parser.add_argument("--num-train", type=int, default=20000)
+    parser.add_argument("--num-test", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
