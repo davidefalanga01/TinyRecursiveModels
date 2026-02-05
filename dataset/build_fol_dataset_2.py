@@ -12,7 +12,7 @@ from dataclasses import dataclass
 @dataclass
 class DataProcessConfig:
     output_dir: str = "data/logic_chain"
-    seq_len: int = 256
+    seq_len: int = 128
     num_train: int = 20000
     num_test: int = 2000
     num_vars: int = 26
