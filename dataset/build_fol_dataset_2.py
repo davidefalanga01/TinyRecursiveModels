@@ -193,14 +193,38 @@ def convert_subset(set_name, config, num):
     final_inputs = np.stack(results["inputs"])[sort_indices]
     final_labels = np.stack(results["labels"])[sort_indices]
     
+    num_samples = len(final_inputs)
+    final_puzzle_identifiers = np.arange(num_samples, dtype=np.int32)
+    final_puzzle_indices = np.arange(num_samples + 1, dtype=np.int32)
+    final_group_indices = np.arange(num_samples + 1, dtype=np.int32)
+
     # Save
     save_dir = os.path.join(config.output_dir, set_name)
     os.makedirs(save_dir, exist_ok=True)
     
-    np.save(os.path.join(save_dir, "inputs.npy"), final_inputs)
-    np.save(os.path.join(save_dir, "labels.npy"), final_labels)
+    np.save(os.path.join(save_dir, "all__inputs.npy"), final_inputs)
+    np.save(os.path.join(save_dir, "all__labels.npy"), final_labels)
+    np.save(os.path.join(save_dir, "all__puzzle_identifiers.npy"), final_puzzle_identifiers)
+    np.save(os.path.join(save_dir, "all__puzzle_indices.npy"), final_puzzle_indices)
+    np.save(os.path.join(save_dir, "all__group_indices.npy"), final_group_indices)
     
     # Metadata
+    metadata = {
+        "seq_len": config.seq_len,
+        "vocab_size": len(VOCAB),
+        "pad_id": VOCAB['pad'],
+        "ignore_label_id": 0,
+        "blank_identifier_id": 0,
+        "num_puzzle_identifiers": num_samples,
+        "total_groups": num_samples,
+        "mean_puzzle_examples": 1.0,
+        "total_puzzles": num_samples,
+        "sets": ["all"]
+    }
+
+    with open(os.path.join(save_dir, "dataset.json"), "w") as f:
+        json.dump(metadata, f)
+
     if set_name == "train":
         with open(os.path.join(config.output_dir, "vocab.json"), "w") as f: 
             json.dump(VOCAB, f)
