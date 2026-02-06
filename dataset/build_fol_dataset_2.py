@@ -35,7 +35,7 @@ VARS = list(string.ascii_uppercase)
 # Tokens used in text format
 SPECIALS = [
     "Facts:", "Rules:", "Target:",
-    "|", ",", "->",
+    "|", "->",
 ]
 
 VOCAB: Dict[str, int] = {
@@ -98,7 +98,7 @@ def format_problem(start_facts: Set[str], rules: List[Rule]) -> str:
     sf = " ".join(sorted(start_facts))
     # IMPORTANT: put spaces around punctuation so the string is readable,
     # but tokenizer below is robust even if you later change formatting.
-    rules_str = " , ".join([f"{s} -> {t}" for s, t in rules])
+    rules_str = " ".join([f"{s} -> {t}" for s, t in rules])
     return f"Facts: {sf} | Rules: {rules_str} | Target:"
 
 
@@ -139,7 +139,7 @@ def tokenize(text: str, seq_len: int) -> Optional[List[int]]:
             continue
 
         # single-char specials
-        if c in ["|", ","]:
+        if c in ["|"]:
             if not emit(c):
                 return None
             i += 1
@@ -147,7 +147,7 @@ def tokenize(text: str, seq_len: int) -> Optional[List[int]]:
 
         # words / labels / vars
         j = i
-        while j < n and (not text[j].isspace()) and text[j] not in ["|", ","]:
+        while j < n and (not text[j].isspace()) and text[j] not in ["|"]:
             # stop before '-' because '->' handled above; keep simple
             if text[j] == "-":
                 break

@@ -10,7 +10,7 @@ from argdantic import ArgParser
 from tqdm import tqdm
 
 VARS = list(string.ascii_uppercase)
-SPECIALS = ['Facts:', 'Rules:', 'Target:', '>', '&', '|', ',']
+SPECIALS = ['Facts:', 'Rules:', 'Target:', '>', '&', '|']
 
 VOCAB = {
     'pad': 0,
@@ -174,7 +174,7 @@ def generate_branching_sample(config: DataProcessConfig) -> Tuple[str, str]:
     if validation_target != sorted_ground_truth:
         raise ValueError(f"VALIDATION FAILED: Distractor changed output!")
 
-    input_str = f"Facts: {' '.join(start_facts_list)} | Rules: {' , '.join(rule_strs)} | Target:"
+    input_str = f"Facts: {' '.join(start_facts_list)} | Rules: {' '.join(rule_strs)} | Target:"
     target_str = " ".join(sorted_ground_truth)
     return input_str, target_str
 
