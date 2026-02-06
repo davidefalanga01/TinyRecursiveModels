@@ -93,6 +93,22 @@ class ACTLossHead(nn.Module):
                 lab_seq = cpu_labels[b]
                 pred_seq = cpu_preds[b]
                 
+                # 1. Extract Facts from Label (Facts: ... |)
+                # Token 28=Facts:, 31=|, 29=Rules:
+                facts_set = set()
+                f_indices = np.where(lab_seq == 28)[0]
+                if len(f_indices) > 0:
+                    f_start = f_indices[0] + 1
+                    # Look for end of facts section (either | or Rules:)
+                    delims = np.where((lab_seq == 31) | (lab_seq == 29))[0]
+                    valid_delims = delims[delims > f_start]
+                    if len(valid_delims) > 0:
+                        f_end = valid_delims[0]
+                        facts_slice = lab_seq[f_start:f_end]
+                        # Facts are variables (2-27)
+                        facts_set = {x for x in facts_slice if 2 <= x <= 27}
+
+                # 2. Extract Target and Pred
                 # Default to full sequence if Target not found (fallback)
                 l_slice = lab_seq
                 p_slice = pred_seq
@@ -110,8 +126,16 @@ class ACTLossHead(nn.Module):
                 l_set = {x for x in l_slice if 2 <= x <= 27}
                 p_set = {x for x in p_slice if 2 <= x <= 27}
 
-                # Check for set equality
-                set_matches.append(l_set == p_set)
+                # 3. Check for correctness
+                # A. All target symbols must be predicted (Missing = Empty)
+                missing = l_set - p_set
+                
+                # B. No hallucinations allowed UNLESS they are in the input Facts
+                # (Hallucinated = Pred - Target - Facts = Empty)
+                hallucinated = p_set - l_set - facts_set
+                
+                is_valid = (len(missing) == 0) and (len(hallucinated) == 0)
+                set_matches.append(is_valid)
                 
             set_accuracy_tensor = torch.tensor(set_matches, device=labels.device, dtype=torch.float32)
 
