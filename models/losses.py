@@ -88,26 +88,27 @@ class ACTLossHead(nn.Module):
             
             for b in range(batch_size):
                 # Filter out ignored tokens and padding (usually 0)
-                l_set = set(cpu_labels[b][cpu_mask[b]])
+                # But FIRST, find the anchor "Target:" (30) in the LABEL to slice both
                 
-                # For preds, we want to start from the first valid label index (skipping prompt)
-                # and verify ALL tokens predicted after that (including hallucinations in padding region).
-                # cpu_mask only selects indices where label is valid, effectively truncating preds to target length.
-                valid_indices = np.nonzero(cpu_mask[b])[0]
-                if len(valid_indices) > 0:
-                    start_idx = valid_indices[0]
-                    p_seq = cpu_preds[b][start_idx:]
-                    p_set = set(p_seq[p_seq != IGNORE_LABEL_ID])
-                else:
-                    # If full sequence is ignored (no target), everything predicted is hallucination?
-                    # Or we just use full sequence?
-                    p_set = set(cpu_preds[b][cpu_preds[b] != IGNORE_LABEL_ID])
-
-                # Filtering: Keep only Variable Tokens (Indices 2-27).
-                # Indices >= 28 are formatting specials (|, &, >, Facts:, etc.)
-                # This ensures the metric measures Logic Correctness, not Syntax Correctness.
-                l_set = {x for x in l_set if x < 28}
-                p_set = {x for x in p_set if x < 28}
+                lab_seq = cpu_labels[b]
+                pred_seq = cpu_preds[b]
+                
+                # Default to full sequence if Target not found (fallback)
+                l_slice = lab_seq
+                p_slice = pred_seq
+                
+                # Check for Target token (30) in LABEL
+                t_indices = np.where(lab_seq == 30)[0]
+                if len(t_indices) > 0:
+                    t_idx = t_indices[0]
+                    # We want everything AFTER the target token
+                    l_slice = lab_seq[t_idx+1:]
+                    p_slice = pred_seq[t_idx+1:]
+                
+                # Now build sets, filtering for Variables (2-27)
+                # This automatically handles padding (0) and special tokens (>=28)
+                l_set = {x for x in l_slice if 2 <= x <= 27}
+                p_set = {x for x in p_slice if 2 <= x <= 27}
 
                 # Check for set equality
                 set_matches.append(l_set == p_set)
