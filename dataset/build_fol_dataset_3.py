@@ -10,7 +10,7 @@ from argdantic import ArgParser
 from tqdm import tqdm
 
 VARS = list(string.ascii_uppercase)
-SPECIALS = ['Facts:', 'Rules:', 'Target:', '>', '&', '|']
+SPECIALS = ['Facts:', 'Rules:', 'Target:', '>', '&', '|', ',']
 
 VOCAB = {
     'pad': 0,
@@ -59,54 +59,34 @@ def get_stratified_target(start_facts: Set[str], rules: List[Tuple[List[str], st
     """
     Simulates the logic flow to assign a DEPTH to each derived fact.
     Returns facts sorted by (Depth, Name).
-    Uses synchronous updates (like BFS) to ensure shortest derivation path is used for depth.
     """
     known = compute_depths(start_facts, rules)
-    
-    # Sort by Depth first, then Alphabetical
     derived = [(depth, target) for target, depth in known.items() if target not in start_facts]
     derived.sort(key=lambda x: (x[0], x[1]))
-    
     return [x[1] for x in derived]
 
 def compute_depths(start_facts: Set[str], rules: List[Tuple[List[str], str]]) -> Dict[str, int]:
     """
     Computes depth for all reachable facts.
-    Returns Dictionary {fact: depth}
     """
     known = {f: 0 for f in start_facts}  # Fact -> Depth
-
     changed = True
     max_iterations = 100
     iteration = 0
-        
     while changed and iteration < max_iterations:
         changed = False
         iteration += 1
-        
-        # Collect all discoveries for this step first
-        step_discoveries = {} # target -> depth
-        
+        step_discoveries = {} 
         for premises, target in rules:
-            if target in known:
-                continue
-            
-            # Check if all premises are known from PREVIOUS steps
+            if target in known: continue
             if all(p in known for p in premises):
-                # Depth = max(premise_depths) + 1
                 new_depth = max(known[p] for p in premises) + 1
-                
-                # If we found multiple paths to the same target in this step,
-                # keep the one with the smallest depth (shortest path)
                 if target not in step_discoveries or new_depth < step_discoveries[target]:
                     step_discoveries[target] = new_depth
-        
-        # Apply updates
         if step_discoveries:
             changed = True
             for target, depth in step_discoveries.items():
                 known[target] = depth
-    
     return known
 
 def generate_branching_sample(config: DataProcessConfig) -> Tuple[str, str]:
@@ -125,9 +105,7 @@ def generate_branching_sample(config: DataProcessConfig) -> Tuple[str, str]:
     
     for _ in range(num_layers):
         potential_targets = [v for v in available_vars if v not in used_vars]
-        if not potential_targets:
-            break
-            
+        if not potential_targets: break
         target = random.choice(potential_targets)
         is_branching = random.random() < config.branch_prob
         
@@ -140,155 +118,89 @@ def generate_branching_sample(config: DataProcessConfig) -> Tuple[str, str]:
         known_facts.add(target)
         used_vars.add(target)
 
-    # 3. CRITICAL FIX: Compute reachable set before generating distractors
+    # 3. Reachable calculation
     reachable = compute_reachable(set(start_facts_list), true_rules)
     unused_vars = [v for v in available_vars if v not in reachable]
     
-    # 4. Add Distractors with SAFE generation strategy
+    # 4. Add Distractors (Simplified: Harmless + Isolated only)
     distractor_rules = []
     attempts = 0
-    
-    # Target distribution: 1/3 each type
-    num_type1 = config.num_distractors // 3
-    num_type2 = config.num_distractors // 3
-    num_type3 = config.num_distractors - num_type1 - num_type2
-    
-    # TYPE 1: Missing one critical premise (tests partial matching)
-    # One premise is reachable, one is NOT → rule never fires
-    for _ in range(num_type1):
-        if len(reachable) < 1 or len(unused_vars) < 1:
-            break
-        attempts += 1
-        if attempts > 500:
-            break
-            
-        good_premise = random.choice(list(reachable))
-        bad_premise = random.choice(unused_vars)
-        
-        # Mix them so order doesn't give away which is bad
-        premises = [good_premise, bad_premise]
-        random.shuffle(premises)
-        
-        target = random.choice(available_vars)
-        
-        # Avoid duplicates
-        if any((set(premises) == set(tr[0]) and target == tr[1]) for tr in true_rules + distractor_rules):
-            continue
-            
-        distractor_rules.append((premises, target))
-    
-    # TYPE 2: All unreachable premises (never fires, isolated subgraph)
-    for _ in range(num_type2):
-        if len(unused_vars) < 2:
-            break
-        attempts += 1
-        if attempts > 500:
-            break
-            
-        s_count = 2 if random.random() < config.branch_prob else 1
-        premises = random.sample(unused_vars, min(s_count, len(unused_vars)))
-        target = random.choice(available_vars)
-        
-        # Avoid duplicates
-        if any((set(premises) == set(tr[0]) and target == tr[1]) for tr in true_rules + distractor_rules):
-            continue
-            
-        distractor_rules.append((premises, target))
-    
-    # TYPE 3: Reachable -> Reachable (harmless, target already derived)
-    # These rules CAN fire, but they don't add new facts
-    # CRITICAL FIX: Ensure they don't provide a SHORTCUT to the target!
-    
-    # Compute original depths to check for shortcuts
+    num_harmless = config.num_distractors // 2
+    num_isolated = config.num_distractors - num_harmless
     true_depths = compute_depths(set(start_facts_list), true_rules)
-    
-    for _ in range(num_type3):
+
+    # TYPE 1: Harmless Reachable
+    for _ in range(num_harmless):
         if len(reachable) < 2:
-            break
+             num_isolated += 1
+             continue
         attempts += 1
-        if attempts > 500:
-            break
-            
+        if attempts > 500: break
         s_count = 2 if random.random() < config.branch_prob else 1
         premises = random.sample(list(reachable), min(s_count, len(reachable)))
         target = random.choice(list(reachable))
-        
-        # Avoid duplicates
-        if any((set(premises) == set(tr[0]) and target == tr[1]) for tr in true_rules + distractor_rules):
-            continue
-            
-        # CHECK FOR SHORTCUTS
-        # New depth would be max(premise_depths) + 1
-        # If this is < original_depth, it's a shortcut -> REJECT
+        # Avoid true rules or existing distractors
+        if any((set(premises) == set(tr[0]) and target == tr[1]) for tr in true_rules + distractor_rules): continue
+        # No shortcuts
         if all(p in true_depths for p in premises) and target in true_depths:
              new_path_depth = max(true_depths[p] for p in premises) + 1
-             if new_path_depth < true_depths[target]:
-                 # This rule creates a faster way to get to target -> Bad distractor
-                 continue
-            
+             if new_path_depth < true_depths[target]: continue 
         distractor_rules.append((premises, target))
 
-    # 5. Format Output with Stratified Sorting
+    # TYPE 2: Isolated
+    for _ in range(num_isolated):
+        if len(unused_vars) < 2: break
+        attempts += 1
+        if attempts > 500: break
+        s_count = 2 if random.random() < config.branch_prob else 1
+        premises = random.sample(unused_vars, min(s_count, len(unused_vars)))
+        target = random.choice(available_vars) 
+        if any((set(premises) == set(tr[0]) and target == tr[1]) for tr in true_rules + distractor_rules): continue
+        distractor_rules.append((premises, target))
+
+    # 5. Format Output (Commas)
     all_rules = true_rules + distractor_rules
     random.shuffle(all_rules)
     
     rule_strs = []
     for premises, target in all_rules:
-        # Sort premises for canonical representation
         lhs = "&".join(sorted(premises)) 
         rule_strs.append(f"{lhs}>{target}")
     
-    # Calculate the Stratified Target from TRUE rules only
     sorted_ground_truth = get_stratified_target(set(start_facts_list), true_rules)
     
-    # 6. VALIDATION: Ensure distractors don't change output
-    # This catches any bugs in distractor generation
+    # Check
     validation_target = get_stratified_target(set(start_facts_list), all_rules)
     if validation_target != sorted_ground_truth:
-        # This should NEVER happen with correct distractor generation
-        # If it does, it means a distractor fired and added new facts
-        raise ValueError(
-            f"VALIDATION FAILED: Distractor changed output!\n"
-            f"Expected: {sorted_ground_truth}\n"
-            f"Got: {validation_target}\n"
-            f"Start: {start_facts_list}\n"
-            f"True rules: {true_rules}\n"
-            f"Distractors: {distractor_rules}"
-        )
+        raise ValueError(f"VALIDATION FAILED: Distractor changed output!")
 
-    input_str = f"Facts: {' '.join(start_facts_list)} | Rules: {' '.join(rule_strs)} | Target:"
+    input_str = f"Facts: {' '.join(start_facts_list)} | Rules: {' , '.join(rule_strs)} | Target:"
     target_str = " ".join(sorted_ground_truth)
-    
     return input_str, target_str
 
 def tokenize(text: str, seq_len: int) -> Optional[List[int]]:
     tokens = []
-    raw_parts = text.split(' ')
-    
-    for part in raw_parts:
-        if not part:
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c.isspace():
+            i += 1
             continue
-        if part in VOCAB:
-            tokens.append(VOCAB[part])
+        matched_special = False
+        for special in sorted(SPECIALS, key=len, reverse=True): 
+            if text[i:].startswith(special):
+                tokens.append(VOCAB[special])
+                i += len(special)
+                matched_special = True
+                break
+        if matched_special: continue
+        if c in VARS:
+            tokens.append(VOCAB[c])
+            i += 1
             continue
-            
-        buffer = ""
-        for char in part:
-            if char in ['&', '>', '|']:
-                if buffer and buffer in VOCAB:
-                    tokens.append(VOCAB[buffer])
-                elif buffer:
-                    # Unknown token - skip with warning in debug mode
-                    pass
-                tokens.append(VOCAB[char])
-                buffer = ""
-            else:
-                buffer += char
-        if buffer and buffer in VOCAB:
-            tokens.append(VOCAB[buffer])
-
-    if len(tokens) > seq_len - 1:
-        return None
+        i += 1 
+    if len(tokens) > seq_len - 1: return None
     tokens.append(VOCAB['end'])
     tokens = tokens + [VOCAB['pad']] * (seq_len - len(tokens))
     return tokens
@@ -309,7 +221,6 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
             try:
                 inp_str, targ_str = generate_branching_sample(config)
             except ValueError as e:
-                # Validation failed - this sample has a bug
                 failed_validations += 1
                 if failed_validations > 100:
                     raise RuntimeError(f"Too many validation failures ({failed_validations}). Check distractor logic.")
@@ -384,7 +295,7 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
 def preprocess_data(config: DataProcessConfig):
     random.seed(config.seed)
     np.random.seed(config.seed)
-    print(f"Generating Branching Logic (Fixed) in: {config.output_dir}")
+    print(f"Generating Branching Logic (Fixed & Aligned) in: {config.output_dir}")
     print(f"Config: layers={config.min_layers}-{config.max_layers}, "
           f"branch_prob={config.branch_prob}, distractors={config.num_distractors}")
     convert_subset("train", config, config.num_train)
