@@ -24,8 +24,8 @@ cli = ArgParser()
 class DataProcessConfig(BaseModel):
     output_dir: str = "data/logic_branching"
     seq_len: int = 256
-    num_train: int = 50000
-    num_test: int = 5000
+    num_train: int = 20000
+    num_test: int = 2000
     num_vars: int = 26
     min_layers: int = 2
     max_layers: int = 6
@@ -59,35 +59,55 @@ def get_stratified_target(start_facts: Set[str], rules: List[Tuple[List[str], st
     """
     Simulates the logic flow to assign a DEPTH to each derived fact.
     Returns facts sorted by (Depth, Name).
+    Uses synchronous updates (like BFS) to ensure shortest derivation path is used for depth.
+    """
+    known = compute_depths(start_facts, rules)
+    
+    # Sort by Depth first, then Alphabetical
+    derived = [(depth, target) for target, depth in known.items() if target not in start_facts]
+    derived.sort(key=lambda x: (x[0], x[1]))
+    
+    return [x[1] for x in derived]
+
+def compute_depths(start_facts: Set[str], rules: List[Tuple[List[str], str]]) -> Dict[str, int]:
+    """
+    Computes depth for all reachable facts.
+    Returns Dictionary {fact: depth}
     """
     known = {f: 0 for f in start_facts}  # Fact -> Depth
-    derived = []
-    
-    # Simple forward chaining to determine depth
+
     changed = True
     max_iterations = 100
     iteration = 0
-    
+        
     while changed and iteration < max_iterations:
         changed = False
         iteration += 1
-        # Iterate over rules to see what activates
+        
+        # Collect all discoveries for this step first
+        step_discoveries = {} # target -> depth
+        
         for premises, target in rules:
             if target in known:
                 continue
             
-            # Check if all premises are known
+            # Check if all premises are known from PREVIOUS steps
             if all(p in known for p in premises):
                 # Depth = max(premise_depths) + 1
                 new_depth = max(known[p] for p in premises) + 1
-                known[target] = new_depth
-                derived.append((new_depth, target))
-                changed = True
+                
+                # If we found multiple paths to the same target in this step,
+                # keep the one with the smallest depth (shortest path)
+                if target not in step_discoveries or new_depth < step_discoveries[target]:
+                    step_discoveries[target] = new_depth
+        
+        # Apply updates
+        if step_discoveries:
+            changed = True
+            for target, depth in step_discoveries.items():
+                known[target] = depth
     
-    # Sort by Depth first, then Alphabetical
-    derived.sort(key=lambda x: (x[0], x[1]))
-    
-    return [x[1] for x in derived]
+    return known
 
 def generate_branching_sample(config: DataProcessConfig) -> Tuple[str, str]:
     available_vars = VARS[:config.num_vars]
@@ -177,6 +197,11 @@ def generate_branching_sample(config: DataProcessConfig) -> Tuple[str, str]:
     
     # TYPE 3: Reachable -> Reachable (harmless, target already derived)
     # These rules CAN fire, but they don't add new facts
+    # CRITICAL FIX: Ensure they don't provide a SHORTCUT to the target!
+    
+    # Compute original depths to check for shortcuts
+    true_depths = compute_depths(set(start_facts_list), true_rules)
+    
     for _ in range(num_type3):
         if len(reachable) < 2:
             break
@@ -191,6 +216,15 @@ def generate_branching_sample(config: DataProcessConfig) -> Tuple[str, str]:
         # Avoid duplicates
         if any((set(premises) == set(tr[0]) and target == tr[1]) for tr in true_rules + distractor_rules):
             continue
+            
+        # CHECK FOR SHORTCUTS
+        # New depth would be max(premise_depths) + 1
+        # If this is < original_depth, it's a shortcut -> REJECT
+        if all(p in true_depths for p in premises) and target in true_depths:
+             new_path_depth = max(true_depths[p] for p in premises) + 1
+             if new_path_depth < true_depths[target]:
+                 # This rule creates a faster way to get to target -> Bad distractor
+                 continue
             
         distractor_rules.append((premises, target))
 
