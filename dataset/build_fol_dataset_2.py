@@ -98,7 +98,7 @@ def format_problem(start_facts: Set[str], rules: List[Rule]) -> str:
     sf = " ".join(sorted(start_facts))
     # IMPORTANT: put spaces around punctuation so the string is readable,
     # but tokenizer below is robust even if you later change formatting.
-    rules_str = " ".join([f"{s} > {t}" for s, t in rules])
+    rules_str = " ".join([f"{s}>{t}" for s, t in rules])
     return f"Facts: {sf} | Rules: {rules_str} | Target:"
 
 
