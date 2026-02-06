@@ -18,7 +18,7 @@ from tqdm import tqdm
 @dataclass
 class DataProcessConfig:
     output_dir: str = "data/logic_chain"
-    seq_len: int = 128
+    seq_len: int = 160
     num_train: int = 20000
     num_test: int = 2000
     num_vars: int = 26
@@ -35,7 +35,7 @@ VARS = list(string.ascii_uppercase)
 # Tokens used in text format
 SPECIALS = [
     "Facts:", "Rules:", "Target:",
-    "|", "->",
+    "|", ">",
 ]
 
 VOCAB: Dict[str, int] = {
@@ -98,7 +98,7 @@ def format_problem(start_facts: Set[str], rules: List[Rule]) -> str:
     sf = " ".join(sorted(start_facts))
     # IMPORTANT: put spaces around punctuation so the string is readable,
     # but tokenizer below is robust even if you later change formatting.
-    rules_str = " ".join([f"{s} -> {t}" for s, t in rules])
+    rules_str = " ".join([f"{s} > {t}" for s, t in rules])
     return f"Facts: {sf} | Rules: {rules_str} | Target:"
 
 
@@ -107,74 +107,33 @@ def format_target(seq: List[str]) -> str:
 
 
 def tokenize(text: str, seq_len: int) -> Optional[List[int]]:
-    """
-    Robust tokenizer:
-    - recognizes single-letter vars (A-Z)
-    - recognizes multi-char token '->'
-    - recognizes specials Facts:, Rules:, Target:, '|', ','
-    - ignores extra whitespace
-    """
-    tokens: List[int] = []
+    tokens = []
     i = 0
     n = len(text)
-
-    def emit(tok: str) -> bool:
-        if tok not in VOCAB:
-            return True  # unknown tokens are silently skipped
-        tokens.append(VOCAB[tok])
-        return len(tokens) <= seq_len - 1
-
     while i < n:
         c = text[i]
-
         if c.isspace():
             i += 1
             continue
-
-        # '->'
-        if i + 1 < n and text[i:i+2] == "->":
-            if not emit("->"):
-                return None
-            i += 2
-            continue
-
-        # single-char specials
-        if c in ["|"]:
-            if not emit(c):
-                return None
+        matched_special = False
+        for special in sorted(SPECIALS, key=len, reverse=True): 
+            if text[i:].startswith(special):
+                tokens.append(VOCAB[special])
+                i += len(special)
+                matched_special = True
+                break
+        if matched_special: continue
+        if c in VARS:
+            tokens.append(VOCAB[c])
             i += 1
             continue
-
-        # words / labels / vars
-        j = i
-        while j < n and (not text[j].isspace()) and text[j] not in ["|"]:
-            # stop before '-' because '->' handled above; keep simple
-            if text[j] == "-":
-                break
-            j += 1
-        chunk = text[i:j]
-
-        # handle Facts:/Rules:/Target: exactly
-        if chunk in ("Facts:", "Rules:", "Target:"):
-            if not emit(chunk):
-                return None
-            i = j
-            continue
-
-        # handle single-letter variables
-        if len(chunk) == 1 and chunk in VARS:
-            if not emit(chunk):
-                return None
-            i = j
-            continue
-
-        # otherwise skip unknown chunk (robustness)
-        i = j if j > i else i + 1
-
-    tokens.append(END_ID)
-    if len(tokens) > seq_len:
-        return None
-    tokens += [PAD_ID] * (seq_len - len(tokens))
+        # Unknown char? -> skip or treat as error. 
+        # The other script simply ignores 'c' if not matched and increments i? 
+        # Wait, the other script has "i += 1" at the end of loop.
+        i += 1 
+    if len(tokens) > seq_len - 1: return None
+    tokens.append(VOCAB['end'])
+    tokens = tokens + [VOCAB['pad']] * (seq_len - len(tokens))
     return tokens
 
 
