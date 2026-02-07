@@ -25,7 +25,6 @@ class DataProcessConfig:
     min_steps: int = 2
     max_steps: int = 6
     num_distractors: int = 4
-    multi_start: bool = True
     seed: int = 42
     max_resample: int = 200
 
@@ -133,10 +132,9 @@ def generate_chain_sample(cfg: DataProcessConfig) -> Tuple[str, str]:
     chain_len = random.randint(cfg.min_steps, cfg.max_steps)
 
     available = VARS[:cfg.num_vars]
-    if cfg.multi_start and chain_len >= 3:
-        num_start = random.randint(1, 2)
-    else:
-        num_start = 1
+    
+    # Updated to match logic from newer datasets
+    num_start = random.randint(2, 4)
 
     needed = num_start + chain_len
     if needed > len(available):
@@ -152,9 +150,13 @@ def generate_chain_sample(cfg: DataProcessConfig) -> Tuple[str, str]:
     for k in range(chain_len - 1):
         true_rules.append((derived_vars[k], derived_vars[k + 1]))
 
-    if num_start == 2 and random.random() < 0.5:
-        s2 = [x for x in start if x != true_rules[0][0]][0]
-        true_rules.append((s2, derived_vars[0]))
+    if num_start >= 2 and random.random() < 0.5:
+        # Find a start fact that wasn't the primary trigger for d0
+        primary_trigger = true_rules[0][0]
+        other_starts = [x for x in start if x != primary_trigger]
+        if other_starts:
+            s2 = other_starts[0]
+            true_rules.append((s2, derived_vars[0]))  # duplicate target, harmless
 
     # FIXED: Build truly isolated distractors
     used = set(chosen)
@@ -293,7 +295,6 @@ def main():
     p.add_argument("--min-steps", type=int, default=DataProcessConfig.min_steps)
     p.add_argument("--max-steps", type=int, default=DataProcessConfig.max_steps)
     p.add_argument("--num-distractors", type=int, default=DataProcessConfig.num_distractors)
-    p.add_argument("--multi-start", action="store_true")
     p.add_argument("--seed", type=int, default=DataProcessConfig.seed)
     args = p.parse_args()
 
@@ -306,7 +307,6 @@ def main():
         min_steps=args.min_steps,
         max_steps=args.max_steps,
         num_distractors=args.num_distractors,
-        multi_start=args.multi_start,
         seed=args.seed,
     )
 
