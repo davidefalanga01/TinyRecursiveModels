@@ -234,14 +234,26 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
             if (input_tokens is None) or (label_tokens is None):
                 continue
                 
-            results["inputs"].append(np.array(input_tokens))
-            results["labels"].append(np.array(label_tokens))
+            # results["inputs"].append(np.array(input_tokens)) <--- REMOVED
+            # results["labels"].append(np.array(label_tokens)) <--- REMOVED
             
             example_id += 1
             puzzle_id += 1
-            results["puzzle_indices"].append(example_id)
             results["puzzle_identifiers"].append(valid_count)
             results["group_indices"].append(puzzle_id)
+            
+            # Masking: Find "Target:" token (VOCAB['Target:']) and mask everything before it (EXCLUSIVE)
+            # We keep the "Target:" token so the model knows when to start predicting.
+            target_token_id = VOCAB['Target:']
+            try:
+                target_idx = label_tokens.index(target_token_id)
+                for i in range(target_idx): # Exclusive
+                    label_tokens[i] = VOCAB['pad']
+            except ValueError:
+                pass
+
+            results["inputs"].append(np.array(input_tokens))
+            results["labels"].append(np.array(label_tokens))
             
             valid_count += 1
             pbar.update(1)
