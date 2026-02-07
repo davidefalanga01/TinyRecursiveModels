@@ -239,6 +239,7 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
             
             example_id += 1
             puzzle_id += 1
+            results["puzzle_indices"].append(example_id)
             results["puzzle_identifiers"].append(valid_count)
             results["group_indices"].append(puzzle_id)
             
