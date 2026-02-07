@@ -69,7 +69,7 @@ def generate_branching_sample(config: DataProcessConfig) -> Tuple[str, str]:
     available_vars = VARS[:config.num_vars]
 
     # 1. Initialize with start facts
-    num_start = random.randint(2, 3)
+    num_start = random.randint(1, 2)
     start_facts = set(random.sample(available_vars, num_start))
     start_facts_list = sorted(list(start_facts))
 

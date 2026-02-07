@@ -26,8 +26,8 @@ cli = ArgParser()
 class DataProcessConfig(BaseModel):
     output_dir: str = "data/logic_negation"
     seq_len: int = 160
-    num_train: int = 50000
-    num_test: int = 5000
+    num_train: int = 20000
+    num_test: int = 2000
     num_vars: int = 26
     min_layers: int = 2
     max_layers: int = 6
@@ -85,7 +85,7 @@ def generate_negation_sample(config: DataProcessConfig) -> Tuple[str, str]:
     forbidden_vars = set(available_vars[split_idx:]) # These can safely be used in ~NOT clauses
     
     # 2. Initialize Facts
-    num_start = random.randint(2, 4)
+    num_start = random.randint(1, 2)
     # Start facts must come from allowed_true_vars
     start_facts = set(random.sample(list(allowed_true_vars), num_start))
     start_facts_list = sorted(list(start_facts))
