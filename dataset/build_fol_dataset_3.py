@@ -243,12 +243,12 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
             results["puzzle_identifiers"].append(valid_count)
             results["group_indices"].append(puzzle_id)
             
-            # Masking: Find "Target:" token (VOCAB['Target:']) and mask everything before it (EXCLUSIVE)
-            # We keep the "Target:" token so the model knows when to start predicting.
+            # Masking: Find "Target:" token (VOCAB['Target:']) and mask everything before it (INCLUSIVE)
+            # We mask "Target:" too so the model has to predict the first answer token from context.
             target_token_id = VOCAB['Target:']
             try:
                 target_idx = label_tokens.index(target_token_id)
-                for i in range(target_idx): # Exclusive
+                for i in range(target_idx + 1): # Inclusive
                     label_tokens[i] = VOCAB['pad']
             except ValueError:
                 pass
