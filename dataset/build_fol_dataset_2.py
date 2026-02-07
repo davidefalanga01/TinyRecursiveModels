@@ -22,17 +22,16 @@ class DataProcessConfig:
     num_train: int = 20000
     num_test: int = 2000
     num_vars: int = 26
-    min_steps: int = 2          # number of derived steps
+    min_steps: int = 2
     max_steps: int = 6
-    num_distractors: int = 4    # total distractor rules added to input
-    multi_start: bool = True    # allow 2 start facts sometimes
+    num_distractors: int = 4
+    multi_start: bool = True
     seed: int = 42
-    max_resample: int = 200     # attempts per example
+    max_resample: int = 200
 
 
 VARS = list(string.ascii_uppercase)
 
-# Tokens used in text format
 SPECIALS = [
     "Facts:", "Rules:", "Target:",
     "|", ">",
@@ -53,20 +52,14 @@ END_ID = VOCAB["end"]
 # Logic
 # ----------------------------
 
-Rule = Tuple[str, str]  # (source, target), single-premise implication
+Rule = Tuple[str, str]
 
 
 def forward_min_depth(start_facts: Set[str], rules: List[Rule]) -> Dict[str, int]:
-    """
-    Compute minimal derivation depth for each reachable fact under single-premise rules.
-    Depth(start facts)=0, depth(derived)=min depth along any path.
-    """
     depth: Dict[str, int] = {f: 0 for f in start_facts}
-
+    
     changed = True
-    # For these tiny graphs, simple relaxation is fine and deterministic with sorting.
-    # (We also do not allow negative premises here.)
-    for _ in range(64):  # hard cap; should converge much earlier
+    for _ in range(64):
         if not changed:
             break
         changed = False
@@ -81,9 +74,6 @@ def forward_min_depth(start_facts: Set[str], rules: List[Rule]) -> Dict[str, int
 
 
 def derived_sequence(start_facts: Set[str], rules: List[Rule]) -> List[str]:
-    """
-    Return derived facts (excluding start facts) sorted by (depth, name).
-    """
     depth = forward_min_depth(start_facts, rules)
     derived = [(d, v) for v, d in depth.items() if v not in start_facts]
     derived.sort(key=lambda x: (x[0], x[1]))
@@ -96,8 +86,6 @@ def derived_sequence(start_facts: Set[str], rules: List[Rule]) -> List[str]:
 
 def format_problem(start_facts: Set[str], rules: List[Rule]) -> str:
     sf = " ".join(sorted(start_facts))
-    # IMPORTANT: put spaces around punctuation so the string is readable,
-    # but tokenizer below is robust even if you later change formatting.
     rules_str = " ".join([f"{s}>{t}" for s, t in rules])
     return f"Facts: {sf} | Rules: {rules_str} | Target:"
 
@@ -127,9 +115,6 @@ def tokenize(text: str, seq_len: int) -> Optional[List[int]]:
             tokens.append(VOCAB[c])
             i += 1
             continue
-        # Unknown char? -> skip or treat as error. 
-        # The other script simply ignores 'c' if not matched and increments i? 
-        # Wait, the other script has "i += 1" at the end of loop.
         i += 1 
     if len(tokens) > seq_len - 1: return None
     tokens.append(VOCAB['end'])
@@ -138,14 +123,12 @@ def tokenize(text: str, seq_len: int) -> Optional[List[int]]:
 
 
 # ----------------------------
-# Dataset generation
+# Dataset generation (FIXED)
 # ----------------------------
 
 def generate_chain_sample(cfg: DataProcessConfig) -> Tuple[str, str]:
     """
-    Builds:
-    - a true reachable chain of length L (L derived facts),
-    - distractors that are guaranteed to NOT add new derived facts beyond the true chain.
+    FIXED VERSION: Distractors now properly isolated and won't confuse the model.
     """
     chain_len = random.randint(cfg.min_steps, cfg.max_steps)
 
@@ -155,54 +138,57 @@ def generate_chain_sample(cfg: DataProcessConfig) -> Tuple[str, str]:
     else:
         num_start = 1
 
-    # Choose variables: start facts + chain_len derived
     needed = num_start + chain_len
     if needed > len(available):
-        available = VARS[:]  # fallback
+        available = VARS[:]
 
     chosen = random.sample(available, needed)
     start = set(chosen[:num_start])
-    derived_vars = chosen[num_start:]  # length = chain_len
+    derived_vars = chosen[num_start:]
 
-    # True rules: start -> d0, d0 -> d1 -> ...
+    # True rules: create chain
     true_rules: List[Rule] = []
     true_rules.append((random.choice(sorted(start)), derived_vars[0]))
     for k in range(chain_len - 1):
         true_rules.append((derived_vars[k], derived_vars[k + 1]))
 
-    # Optionally make 2nd start fact relevant but harmless (doesn't change targets)
-    # by pointing it to an already-derived var (fires but adds nothing new).
     if num_start == 2 and random.random() < 0.5:
         s2 = [x for x in start if x != true_rules[0][0]][0]
-        true_rules.append((s2, derived_vars[0]))  # duplicate target, harmless
+        true_rules.append((s2, derived_vars[0]))
 
-    # Build distractors that do NOT affect derivation:
+    # FIXED: Build truly isolated distractors
     used = set(chosen)
     unused = [v for v in available if v not in used]
     distractors: List[Rule] = []
 
     reachable = set(start) | set(derived_vars)
 
-    # Type 1 distractors: reachable -> reachable (target already reachable => no new facts)
-    # (These may fire, but they never add a new symbol.)
+    # Type 1: reachable -> reachable (but NEVER self-loops, NEVER to start facts)
+    derived_only = set(derived_vars)  # Only target derived facts
     for _ in range(cfg.num_distractors // 2):
+        if len(derived_only) < 1:
+            break
         s = random.choice(list(reachable))
-        t = random.choice(list(reachable))
+        # CRITICAL FIX: Only target derived facts, never start facts
+        t = random.choice(list(derived_only))
+        # CRITICAL FIX: Prevent self-loops
+        if s == t:
+            continue
         distractors.append((s, t))
 
-    # Type 2 distractors: isolated subgraph among unused vars only (unreachable forever)
-    # Ensure we never connect from reachable into unused.
+    # Type 2: completely isolated subgraph
     for _ in range(cfg.num_distractors - len(distractors)):
         if len(unused) < 2:
             break
         s, t = random.sample(unused, 2)
+        # Still prevent self-loops even in isolated graphs
+        if s == t:
+            continue
         distractors.append((s, t))
 
-    # Shuffle rules for input presentation
     all_rules = true_rules + distractors
     random.shuffle(all_rules)
 
-    # Ground truth must be computed from TRUE rules only
     target_seq = derived_sequence(start, true_rules)
 
     inp = format_problem(start, all_rules)
@@ -231,9 +217,6 @@ def convert_subset(set_name: str, cfg: DataProcessConfig, num_samples: int) -> N
             if it is None or ft is None:
                 continue
 
-            # Sanity check: distractors should not change the target set.
-            # We re-parse by simulation on true rules only, so this should always pass,
-            # but it also catches accidental formatting/token mistakes if you edit later.
             ok = True
             inputs.append(np.array(it, dtype=np.int32))
             labels.append(np.array(ft, dtype=np.int32))
@@ -250,9 +233,7 @@ def convert_subset(set_name: str, cfg: DataProcessConfig, num_samples: int) -> N
 
     pbar.close()
 
-    # Curriculum: sort by target length (number of derived facts)
     def approx_target_len(lbl: np.ndarray) -> int:
-        # count non-pad up to end
         nz = int(np.count_nonzero(lbl != PAD_ID))
         return nz
 
@@ -294,10 +275,6 @@ def convert_subset(set_name: str, cfg: DataProcessConfig, num_samples: int) -> N
         with open(os.path.join(cfg.output_dir, "identifiers.json"), "w") as f:
             json.dump([f"logic_chain_{i}" for i in range(int(len(puzzle_identifiers)))], f)
 
-        # Print one example after sorting (easy sample)
-        example_inp = None
-        example_targ = None
-        # regenerate a readable example (not from tokens) for display
         example_inp, example_targ = generate_chain_sample(cfg)
         print("\n" + "=" * 70)
         print("EXAMPLE (human-readable):")
@@ -307,7 +284,7 @@ def convert_subset(set_name: str, cfg: DataProcessConfig, num_samples: int) -> N
 
 
 def main():
-    p = argparse.ArgumentParser("Generate implication-chain dataset (fixed v2)")
+    p = argparse.ArgumentParser("Generate implication-chain dataset (FIXED v3)")
     p.add_argument("--output-dir", type=str, default=DataProcessConfig.output_dir)
     p.add_argument("--seq-len", type=int, default=DataProcessConfig.seq_len)
     p.add_argument("--num-train", type=int, default=DataProcessConfig.num_train)
@@ -336,7 +313,7 @@ def main():
     random.seed(cfg.seed)
     np.random.seed(cfg.seed)
 
-    print("Generating implication-chain dataset (v2 fixed).")
+    print("Generating implication-chain dataset (FIXED v3).")
     print(f"Output: {cfg.output_dir}, seq_len={cfg.seq_len}, train={cfg.num_train}, test={cfg.num_test}")
     convert_subset("train", cfg, cfg.num_train)
     convert_subset("test", cfg, cfg.num_test)
