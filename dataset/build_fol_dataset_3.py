@@ -23,9 +23,9 @@ cli = ArgParser()
 
 class DataProcessConfig(BaseModel):
     output_dir: str = "data/logic_branching"
-    seq_len: int = 160
-    num_train: int = 20000
-    num_test: int = 2000
+    seq_len: int = 128
+    num_train: int = 10000
+    num_test: int = 1000
     num_vars: int = 26
     min_layers: int = 2
     max_layers: int = 6
