@@ -102,7 +102,7 @@ def generate_negation_or_sample(config: DataProcessConfig) -> Tuple[str, str]:
     forbidden_vars = set(available_vars[split_idx:]) 
     
     # 2. Initialize Facts
-    num_start = random.randint(2, 4)
+    num_start = random.randint(1, 2)
     start_facts = set(random.sample(list(allowed_true_vars), num_start))
     start_facts_list = sorted(list(start_facts))
     
