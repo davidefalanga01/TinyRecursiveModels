@@ -106,7 +106,8 @@ def generate_negation_sample(config: DataProcessConfig) -> Tuple[str, str]:
         
         # Build Premises
         # We need at least 1 positive premise from Known Facts to anchor the depth
-        pos_prem = random.sample(list(known_facts), random.randint(1, 2))
+        num_pos = min(len(known_facts), random.randint(1, 2))
+        pos_prem = random.sample(list(known_facts), num_pos)
         
         neg_prem = []
         # Chance to add a Negative Premise
