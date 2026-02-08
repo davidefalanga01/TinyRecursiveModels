@@ -8,10 +8,13 @@ from pydantic import BaseModel
 from argdantic import ArgParser
 from tqdm import tqdm
 
+from common import PuzzleDatasetMetadata
+
+IGNORE_LABEL_ID = 0
+
 
 NUM_TOKEN = "NUM"
 OPS = ['+', '-', '*', '/']
-PARENS = ['(', ')']
 
 VOCAB = {
     'pad': 0,
@@ -32,6 +35,7 @@ TOKEN_TYPE = {
 
 cli = ArgParser()
 
+
 class DataProcessConfig(BaseModel):
     output_dir: str = "data/arith_dataset"
     seq_len: int = 64
@@ -43,6 +47,7 @@ class DataProcessConfig(BaseModel):
     max_number: int = 20
 
 
+
 def generate_expression(depth: int, min_num: int, max_num: int) -> str:
     if depth == 0 or random.random() < 0.2:
         return str(random.randint(min_num, max_num))
@@ -51,7 +56,7 @@ def generate_expression(depth: int, min_num: int, max_num: int) -> str:
     left = generate_expression(depth - 1, min_num, max_num)
     right = generate_expression(depth - 1, min_num, max_num)
 
-    # divisioni sempre intere
+    # integer divisions only
     if op == '/':
         denom = random.randint(2, 9)
         num = denom * random.randint(1, 10)
@@ -73,13 +78,11 @@ def tokenize(expr: str, seq_len: int):
             token_ids.append(VOCAB[NUM_TOKEN])
             num_values.append(int(t))
             token_types.append(TOKEN_TYPE['NUM'])
-
         elif t in OPS:
             token_ids.append(VOCAB[t])
             num_values.append(0)
             token_types.append(TOKEN_TYPE['OP'])
-
-        else:  # parentesi
+        else:
             token_ids.append(VOCAB[t])
             num_values.append(0)
             token_types.append(TOKEN_TYPE['PAREN'])
@@ -89,12 +92,13 @@ def tokenize(expr: str, seq_len: int):
     num_values.append(0)
     token_types.append(TOKEN_TYPE['END'])
 
-    # padding / truncation
+    # pad/truncate
+    pad_id = VOCAB['pad']
     if len(token_ids) < seq_len:
         pad_len = seq_len - len(token_ids)
-        token_ids.extend([VOCAB['pad']] * pad_len)
-        num_values.extend([0] * pad_len)
-        token_types.extend([TOKEN_TYPE['PAD']] * pad_len)
+        token_ids.extend([pad_id]*pad_len)
+        num_values.extend([0]*pad_len)
+        token_types.extend([TOKEN_TYPE['PAD']]*pad_len)
     else:
         token_ids = token_ids[:seq_len]
         token_ids[-1] = VOCAB['end']
@@ -103,55 +107,86 @@ def tokenize(expr: str, seq_len: int):
         token_types = token_types[:seq_len]
         token_types[-1] = TOKEN_TYPE['END']
 
-    return (
-        np.array(token_ids, dtype=np.int64),
-        np.array(num_values, dtype=np.int64),
-        np.array(token_types, dtype=np.int64),
+    # final input = concatenation (simple 3×seq_len)
+    input_vec = np.stack([token_ids, num_values, token_types], axis=1).astype(np.int32)  
+    return input_vec
+
+
+def convert_subset(name: str, config: DataProcessConfig):
+    rng = np.random.default_rng(config.seed)
+
+    results = {
+        "inputs": [],
+        "labels": [],
+        "puzzle_identifiers": [],
+        "puzzle_indices": [0],
+        "group_indices": [0],
+    }
+
+    example_id = 0
+    puzzle_id = 0
+
+    num_samples = config.num_train if name == "train" else config.num_test
+
+    for _ in tqdm(range(num_samples), desc=f"{name}"):
+        depth = random.randint(1, config.max_depth)
+        expr = generate_expression(depth, config.min_number, config.max_number)
+        result = eval_expression(expr)
+
+        # (seq_len, 3)
+        inp = tokenize(expr, config.seq_len)
+
+        # labels: 1 target per example
+        # we place it at last position, others are ignore
+        label = np.full((config.seq_len,), IGNORE_LABEL_ID, dtype=np.int32)
+        label[-1] = result
+
+        results["inputs"].append(inp.reshape(-1))
+        results["labels"].append(label)
+        results["puzzle_identifiers"].append(0)
+
+        example_id += 1
+        puzzle_id += 1
+        results["puzzle_indices"].append(example_id)
+        results["group_indices"].append(puzzle_id)
+
+    # convert to arrays
+    def _stack(x):
+        return np.stack(x, axis=0).astype(np.int32)
+
+    results_np = {
+        "inputs": _stack(results["inputs"]),
+        "labels": _stack(results["labels"]),
+        "puzzle_indices": np.array(results["puzzle_indices"], dtype=np.int32),
+        "group_indices": np.array(results["group_indices"], dtype=np.int32),
+        "puzzle_identifiers": np.array(results["puzzle_identifiers"], dtype=np.int32),
+    }
+
+    metadata = PuzzleDatasetMetadata(
+        seq_len=config.seq_len * 3,
+        vocab_size=len(VOCAB),
+        pad_id=VOCAB['pad'],
+        ignore_label_id=IGNORE_LABEL_ID,
+        blank_identifier_id=0,
+        num_puzzle_identifiers=1,
+        total_groups=len(results_np["group_indices"])-1,
+        mean_puzzle_examples=1,
+        total_puzzles=len(results_np["puzzle_indices"])-1,
+        sets=["all"]
     )
-
-def generate_sample(config: DataProcessConfig):
-    depth = random.randint(1, config.max_depth)
-    expr = generate_expression(
-        depth,
-        config.min_number,
-        config.max_number
-    )
-    result = eval_expression(expr)
-    return expr, result
-
-
-def convert_subset(name: str, config: DataProcessConfig, num_samples: int):
-    tokens, numbers, types, labels = [], [], [], []
-
-    for _ in tqdm(range(num_samples), desc=f"Generating {name}"):
-        expr, result = generate_sample(config)
-        tok, num, typ = tokenize(expr, config.seq_len)
-
-        tokens.append(tok)
-        numbers.append(num)
-        types.append(typ)
-        labels.append(np.array([result], dtype=np.int64))
 
     save_dir = os.path.join(config.output_dir, name)
     os.makedirs(save_dir, exist_ok=True)
 
-    np.save(os.path.join(save_dir, "tokens.npy"), np.stack(tokens))
-    np.save(os.path.join(save_dir, "numbers.npy"), np.stack(numbers))
-    np.save(os.path.join(save_dir, "types.npy"), np.stack(types))
-    np.save(os.path.join(save_dir, "labels.npy"), np.stack(labels))
-
-    metadata = {
-        "seq_len": config.seq_len,
-        "vocab_size": len(VOCAB),
-        "num_token_id": VOCAB[NUM_TOKEN],
-        "pad_id": VOCAB['pad'],
-        "num_samples": num_samples,
-    }
-
+    # save metadata
     with open(os.path.join(save_dir, "dataset.json"), "w") as f:
-        json.dump(metadata, f, indent=2)
+        json.dump(metadata.model_dump(), f)
 
-    print(f"Example [{name}]: {expr} = {result}")
+    # save arrays
+    for key, val in results_np.items():
+        np.save(os.path.join(save_dir, f"all__{key}.npy"), val)
+
+    print(f"Example {name}: {expr} = {result}")
 
 
 @cli.command(singleton=True)
@@ -159,10 +194,10 @@ def preprocess_data(config: DataProcessConfig):
     random.seed(config.seed)
     np.random.seed(config.seed)
 
-    convert_subset("train", config, config.num_train)
-    convert_subset("test", config, config.num_test)
+    convert_subset("train", config)
+    convert_subset("test", config)
 
-    print("✔ Dataset generation complete.")
+    print("Arithmetic PuzzleDataset generation complete.")
 
 
 if __name__ == "__main__":
