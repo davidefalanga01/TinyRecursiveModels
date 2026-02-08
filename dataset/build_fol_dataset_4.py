@@ -192,7 +192,7 @@ def tokenize(text: str, seq_len: int) -> Optional[List[int]]:
             char = part[i]
             
             # Check for operators
-            if char in ['&', '>', '|']:
+            if char in ['&', '>']:
                 if buffer and buffer in VOCAB: tokens.append(VOCAB[buffer])
                 tokens.append(VOCAB[char])
                 buffer = ""

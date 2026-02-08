@@ -13,7 +13,7 @@ from tqdm import tqdm
 VARS = list(string.ascii_uppercase)
 # Added '~' for negation, '|' for OR.
 # Structure: Facts, Rules, Target
-SPECIALS = ['Facts:', 'Rules:', 'Target:', '>', '&', '~', '|']
+SPECIALS = ['Facts:', 'Rules:', 'Target:', '>', '&', '~', '|', ';']
 
 VOCAB = {
     'pad': 0,
@@ -220,7 +220,7 @@ def generate_negation_or_sample(config: DataProcessConfig) -> Tuple[str, str]:
     # Calculate Stratified Target (Ground Truth)
     final_target = get_stratified_target(set(start_facts_list), true_rules)
     
-    input_str = f"Facts: {' '.join(start_facts_list)} | Rules: {' '.join(rule_strs)} | Target:"
+    input_str = f"Facts: {' '.join(start_facts_list)} ; Rules: {' '.join(rule_strs)} ; Target:"
     target_str = " ".join(final_target)
     
     return input_str, target_str
@@ -241,7 +241,7 @@ def tokenize(text: str, seq_len: int) -> Optional[List[int]]:
             char = part[i]
             
             # Check for operators: &, >, |
-            if char in ['&', '>', '|']:
+            if char in ['&', '>', '|', ';']:
                 if buffer and buffer in VOCAB: tokens.append(VOCAB[buffer])
                 tokens.append(VOCAB[char])
                 buffer = ""
