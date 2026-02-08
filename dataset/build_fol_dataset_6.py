@@ -44,8 +44,8 @@ class DataProcessConfig(BaseModel):
     
     min_rules: int = 1
     max_rules: int = 3
-    min_facts: int = 2
-    max_facts: int = 5
+    min_facts: int = 1
+    max_facts: int = 2
     
     # Curriculum: 'ground', 'unary_rules', 'binary_rules', 'mixed'
     curriculum_stage: str = "binary_rules" 
