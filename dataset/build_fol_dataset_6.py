@@ -35,8 +35,8 @@ cli = ArgParser()
 class DataProcessConfig(BaseModel):
     output_dir: str = "data/fol_basic"
     seq_len: int = 160  # Increased for more complex FOL formulas
-    num_train: int = 20000
-    num_test: int = 2000
+    num_train: int = 30000
+    num_test: int = 3000
     
     # FOL Specifics
     num_constants: int = 4   # Number of constants active in a sample (domain size)
