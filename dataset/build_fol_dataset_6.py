@@ -467,6 +467,16 @@ def convert_subset(set_name: str, config: DataProcessConfig, num_samples: int):
         while valid_count < num_samples:
             try:
                 inp_str, targ_str = generate_sample(config)
+                
+                # Retry if target is empty
+                retry_count = 0
+                while not targ_str and retry_count < 20:
+                    inp_str, targ_str = generate_sample(config)
+                    retry_count += 1
+                
+                if not targ_str:
+                    continue
+
                 full_text = f"{inp_str} {targ_str}"
                 
                 input_tokens = tokenize(inp_str, config.seq_len)
