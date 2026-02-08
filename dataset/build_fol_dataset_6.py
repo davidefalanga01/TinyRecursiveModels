@@ -34,7 +34,7 @@ cli = ArgParser()
 
 class DataProcessConfig(BaseModel):
     output_dir: str = "data/fol_basic"
-    seq_len: int = 200  # Increased for more complex FOL formulas
+    seq_len: int = 160  # Increased for more complex FOL formulas
     num_train: int = 20000
     num_test: int = 2000
     
