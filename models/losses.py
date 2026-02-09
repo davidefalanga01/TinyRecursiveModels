@@ -71,67 +71,105 @@ class ACTLossHead(nn.Module):
             seq_is_correct = is_correct.sum(-1) == loss_counts
             
             # --- NEW METRIC: SET ACCURACY ---
-            # Used to evaluate logical correctness ignoring order
-            # This is expensive for huge batches, but fine for Tiny Models
-            # We must ignore padding (0) or specialized ignore indices
+            # Used to evaluate logical correctness ignoring order of atoms.
+            # Compatible with both FOL (atoms with parens) and Logic Chain (variables).
             
-            # 1. Extract sets from labels and preds using the mask
-            # Note: This runs on CPU usually because of list comps, or we can use tensor ops if shape is fixed.
-            # Given variable length masking, list comprehension is safer/easier to implement quickly.
             batch_size = labels.shape[0]
             set_matches = []
             
-            # Move to CPU for set operations to avoid cuda sync overhead loop
+            # Move to CPU for set operations
             cpu_labels = labels.detach().cpu().numpy()
             cpu_preds = preds.detach().cpu().numpy()
-            cpu_mask = mask.detach().cpu().numpy()
+            
+            # Known Token IDs across datasets
+            # FOL (Dataset 6): Facts: 43, Target: 45, |: 51, ): 49, Rules: 44
+            # Logic (Dataset 2/3): Facts: 28, Target: 30, |: 31/33, Rules: 29
+            TRGT_IDS = [45, 30]
+            FACT_IDS = [43, 28]
+            
+            # Helper: Find first matching ID in sequence
+            def find_first(seq, candidates):
+                for cand in candidates:
+                    indices = np.where(seq == cand)[0]
+                    if len(indices) > 0:
+                        return cand, indices[0]
+                return None, None
+
+            def extract_atoms_fol(seq):
+                # FOL: Atoms end with ')' (49)
+                atoms = set()
+                current_atom = []
+                for token in seq:
+                    if token == 0: continue # Pad
+                    if token == 1: break    # End
+                    # Reset on known delimiters or new section headers
+                    if token in [43, 44, 45, 51]: 
+                        current_atom = []
+                        continue
+                    current_atom.append(token)
+                    if token == 49: # ')'
+                        atoms.add(tuple(current_atom))
+                        current_atom = []
+                return atoms
+
+            def extract_atoms_simple(seq):
+                # Logic Chain: Atoms are single tokens (variables A-Z, 2..27)
+                # Ignore special tokens >= 28
+                atoms = set()
+                for token in seq:
+                    if token == 0: continue
+                    if token == 1: break
+                    if token >= 28: continue # Ignore headers/delims if present
+                    atoms.add((token,))
+                return atoms
             
             for b in range(batch_size):
-                # Filter out ignored tokens and padding (usually 0)
-                # But FIRST, find the anchor "Target:" (30) in the LABEL to slice both
-                
                 lab_seq = cpu_labels[b]
                 pred_seq = cpu_preds[b]
                 
-                # 1. Extract Facts from Label (Facts: ... |)
-                # Token 28=Facts:, 31=|, 29=Rules:
-                facts_set = set()
-                f_indices = np.where(lab_seq == 28)[0]
-                if len(f_indices) > 0:
-                    f_start = f_indices[0] + 1
-                    # Look for end of facts section (either | or Rules:)
-                    delims = np.where((lab_seq == 31) | (lab_seq == 29))[0]
-                    valid_delims = delims[delims > f_start]
-                    if len(valid_delims) > 0:
-                        f_end = valid_delims[0]
-                        facts_slice = lab_seq[f_start:f_end]
-                        # Facts are variables (2-27)
-                        facts_set = {x for x in facts_slice if 2 <= x <= 27}
-
-                # 2. Extract Target and Pred
-                # Default to full sequence if Target not found (fallback)
+                # 1. Detect Format based on Target token
+                trgt_id, t_idx = find_first(lab_seq, TRGT_IDS)
+                
+                # Default slices (full sequence if no Target found)
                 l_slice = lab_seq
                 p_slice = pred_seq
                 
-                # Check for Target token (30) in LABEL
-                t_indices = np.where(lab_seq == 30)[0]
-                if len(t_indices) > 0:
-                    t_idx = t_indices[0]
-                    # We want everything AFTER the target token
+                if t_idx is not None:
                     l_slice = lab_seq[t_idx+1:]
                     p_slice = pred_seq[t_idx+1:]
                 
-                # Now build sets, filtering for Variables (2-27)
-                # This automatically handles padding (0) and special tokens (>=28)
-                l_set = {x for x in l_slice if 2 <= x <= 27}
-                p_set = {x for x in p_slice if 2 <= x <= 27}
+                # Determine mode: check if slice has ')' (49)
+                # FOL mode if 49 is present, else Simple mode
+                is_fol = (49 in l_slice)
+                
+                extract_fn = extract_atoms_fol if is_fol else extract_atoms_simple
+                
+                l_set = extract_fn(l_slice)
+                p_set = extract_fn(p_slice)
+                
+                # 2. Extract Facts (for hallucination check)
+                facts_set = set()
+                fact_id, f_idx = find_first(lab_seq, FACT_IDS)
+                
+                if f_idx is not None:
+                    f_start = f_idx + 1
+                    # Find end of facts: | or Rules: or Target:
+                    # Delims: 51(FOL |), 31(Chain |), 33(Branch |), 44(FOL Rules), 29(Chain Rules)
+                    # We just look for the next token that looks like a delimiter
+                    # Simple heuristic: scan until we hit a known delimiter ID
+                    delims = [51, 31, 33, 44, 29, 45, 30] # Includes Target too just in case
+                    
+                    f_slice = []
+                    for k in range(f_start, len(lab_seq)):
+                        tok = lab_seq[k]
+                        if tok in delims:
+                            break
+                        f_slice.append(tok)
+                    
+                    facts_set = extract_fn(np.array(f_slice))
 
                 # 3. Check for correctness
-                # A. All target symbols must be predicted (Missing = Empty)
                 missing = l_set - p_set
-                
-                # B. No hallucinations allowed UNLESS they are in the input Facts
-                # (Hallucinated = Pred - Target - Facts = Empty)
                 hallucinated = p_set - l_set - facts_set
                 
                 is_valid = (len(missing) == 0) and (len(hallucinated) == 0)
