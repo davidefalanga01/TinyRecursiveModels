@@ -82,7 +82,7 @@ def eval_prefix(expr: str) -> str:
 
 def generate_prefix(depth: int, distinct_vars: List[str]) -> str:
     # Case 0: random letter 
-    if depth == 0 or random.random() < 0.2:
+    if depth == 0 or random.random() < 0.1:
         return random.choice(distinct_vars)
     
     op = random.choice(OPS)
