@@ -81,7 +81,7 @@ def generate_constrained_prefix(target: int, depth: int, min_val: int, max_val: 
     Generate an expression that is = to 'target';
     this ensure that there is none value bigger than 'max_val'.
     """
-    if depth == 0 or random.random() < 0.3:
+    if depth == 0 or random.random() < 0.1:
         return str(target)
 
     ops = list(OPS)
