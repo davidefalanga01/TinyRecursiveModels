@@ -27,8 +27,8 @@ cli = ArgParser()
 class DataProcessConfig(BaseModel):
     output_dir: str = "data/logic_or"
     seq_len: int = 160 # Increased slightly for more complex rules
-    num_train: int = 30000
-    num_test: int = 3000
+    num_train: int = 20000
+    num_test: int = 2000
     num_vars: int = 26
     min_layers: int = 2
     max_layers: int = 6
