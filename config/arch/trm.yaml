@@ -2,6 +2,8 @@ name: recursive_reasoning.trm@TinyRecursiveReasoningModel_ACTV1
 loss:
   name: losses@ACTLossHead
   loss_type: stablemax_cross_entropy
+  use_target_masking: True
+  target_token_id: 30 # Default for standard datasets. Use 45 for FOL (dataset_6).
 
 halt_exploration_prob: 0.1
 halt_max_steps: 16
