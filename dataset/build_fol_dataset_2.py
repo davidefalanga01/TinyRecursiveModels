@@ -191,7 +191,7 @@ def generate_chain_sample(cfg: DataProcessConfig) -> Tuple[str, str]:
     all_rules = true_rules + distractors
     random.shuffle(all_rules)
 
-    target_seq = derived_sequence(start, true_rules)
+    target_seq = derived_sequence(start, all_rules)
 
     inp = format_problem(start, all_rules)
     targ = format_target(target_seq)
