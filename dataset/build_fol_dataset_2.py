@@ -134,7 +134,7 @@ def generate_chain_sample(cfg: DataProcessConfig) -> Tuple[str, str]:
     available = VARS[:cfg.num_vars]
     
     # Updated to match logic from newer datasets
-    num_start = random.randint(2, 4)
+    num_start = random.randint(1, 2)
 
     needed = num_start + chain_len
     if needed > len(available):
